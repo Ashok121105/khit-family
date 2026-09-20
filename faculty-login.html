@@ -35,6 +35,16 @@
         input {
             width: 100%; padding: 12px 13px; border-radius: 8px; border: 1px solid #cbd5e1; font-size: 14px; outline: none;
         }
+        .password-wrap { position: relative; }
+        .password-wrap input { padding-right: 48px; }
+        .mouth-toggle {
+            position: absolute; top: 50%; right: 8px; transform: translateY(-50%);
+            width: 34px; height: 34px; border: 0; border-radius: 50%;
+            background: #f8e8ed; color: #8f1738; cursor: pointer;
+            display: flex; align-items: center; justify-content: center; padding: 0;
+            font-size: 18px; line-height: 1; font-family: "Segoe UI Emoji", sans-serif;
+        }
+        .mouth-toggle:hover, .mouth-toggle:focus-visible { background: #f4ccd7; outline: 2px solid rgba(143,23,56,0.25); }
         input:focus { border-color: #2563eb; box-shadow: 0 0 0 2px rgba(37,99,235,0.08); }
         .login-btn {
             width: 100%; border: none; background: #8f1738; color: white; padding: 12px; border-radius: 8px; font-size: 15px; font-weight: 700; cursor: pointer;
@@ -65,7 +75,10 @@
 
         <div class="field">
             <label for="password">Password</label>
-            <input id="password" type="password" placeholder="Enter faculty password" autocomplete="current-password">
+            <div class="password-wrap">
+                <input id="password" type="password" placeholder="Enter faculty password" autocomplete="current-password">
+                <button class="mouth-toggle" type="button" onclick="togglePasswordVisibility('password', this)" aria-label="Show password" title="Show password">🙈</button>
+            </div>
         </div>
 
         <button class="login-btn" id="loginBtn" onclick="facultyLogin()">Login</button>
@@ -80,6 +93,15 @@
 
     <script>
         const API_URL = "http://localhost:5000";
+
+        function togglePasswordVisibility(inputId, button) {
+            const input = document.getElementById(inputId);
+            const isVisible = input.type === "text";
+            input.type = isVisible ? "password" : "text";
+            button.textContent = isVisible ? "🙈" : "👀";
+            button.setAttribute("aria-label", isVisible ? "Show password" : "Hide password");
+            button.setAttribute("title", isVisible ? "Show password" : "Hide password");
+        }
 
         async function facultyLogin() {
             const username = document.getElementById("username").value.trim();
@@ -139,7 +161,11 @@
                 if (!response.ok || result.status !== "success") {
                     throw new Error(result.message || "Unable to fetch demo credentials");
                 }
-                alert(`Faculty Demo Credentials:\n\nUsername: ${result.demoAccounts.faculty.username}\nPassword: ${result.demoAccounts.faculty.password}`);
+                const faculty = result.demoAccounts?.faculty;
+                if (!faculty?.username || !faculty?.password) {
+                    throw new Error("Faculty demo credentials are unavailable.");
+                }
+                alert(`Faculty Demo Credentials:\n\nUsername: ${faculty.username}\nPassword: ${faculty.password}`);
             } catch (error) {
                 alert(error.message || "Unable to fetch demo credentials");
             }

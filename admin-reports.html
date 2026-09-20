@@ -230,7 +230,7 @@
   <script>
     const token = localStorage.getItem('khit_token');
     const user = JSON.parse(localStorage.getItem('khit_user') || '{}');
-    const API = 'http://localhost:5000';
+    const API = window.location.origin;
 
     if (!token) {
       window.location.href = 'database/admin-login.html';

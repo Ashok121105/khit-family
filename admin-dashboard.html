@@ -522,7 +522,7 @@ body {
              Timetable
         </a>
 
-        <a href="#">
+        <a href="admin-results.html">
              Exams & Results
         </a>
 
@@ -743,6 +743,12 @@ body {
                 <p>Monitor attendance, fee progress and department health.</p>
             </div>
 
+            <div class="module" onclick="openResults()">
+                <div class="module-icon">📈</div>
+                <h3>Result Analytics</h3>
+                <p>Review semester results, pass rates and 3D department trends.</p>
+            </div>
+
             <div class="module" onclick="openDocuments()">
                 <div class="module-icon">📄</div>
                 <h3>Documents</h3>
@@ -823,7 +829,7 @@ body {
 
 <script>
 
-const API = "http://localhost:5000";
+const API = window.location.origin;
 const token = localStorage.getItem("khit_token");
 const storedUser = localStorage.getItem("khit_user");
 
@@ -867,6 +873,7 @@ function openDocuments() { navigate("admin-documents.html"); }
 function openLeave() { navigate("admin-leave.html"); }
 function openSettings() { navigate("admin-settings.html"); }
 function openReports() { navigate("admin-reports.html"); }
+function openResults() { navigate("admin-results.html"); }
 
 async function loadDashboardStats() {
     if (!token) return;

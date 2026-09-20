@@ -9,6 +9,7 @@ const db = new Database(dbPath);
 
 // Enable foreign keys
 db.pragma("foreign_keys = ON");
+db.pragma("busy_timeout = 5000");
 
 // Better SQLite performance
 db.pragma("journal_mode = WAL");

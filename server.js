@@ -11,6 +11,7 @@ const jwt = require("jsonwebtoken");
 const nodemailer = require("nodemailer");
 const multer = require("multer");
 const XLSX = require("xlsx");
+const crypto = require("crypto");
 const path = require("path");
 const fs = require("fs");
 
@@ -58,7 +59,7 @@ const upload = multer({
 
             callback(
                 null,
-                `${Date.now()}-${baseName || "upload"}${extension}`
+                `${Date.now()}-${crypto.randomBytes(8).toString("hex")}-${baseName || "upload"}${extension}`
             );
         }
     }),
@@ -78,12 +79,190 @@ const upload = multer({
 
 app.use(cors());
 
-app.use(express.json({ limit: "10mb" }));
+app.use(express.json({ limit: "1mb" }));
 
 app.use(express.urlencoded({
     extended: true,
-    limit: "10mb"
+    limit: "1mb"
 }));
+
+function getPagination(req, defaults = {}) {
+    const defaultLimit = defaults.defaultLimit ?? 5000;
+    const maxLimit = defaults.maxLimit ?? 5000;
+    const requestedLimit = Number.parseInt(req.query.limit, 10);
+    const requestedPage = Number.parseInt(req.query.page, 10);
+    const limit = Number.isFinite(requestedLimit)
+        ? Math.min(Math.max(requestedLimit, 1), maxLimit)
+        : defaultLimit;
+    const page = Number.isFinite(requestedPage)
+        ? Math.max(requestedPage, 1)
+        : 1;
+
+    return {
+        page,
+        limit,
+        offset: (page - 1) * limit
+    };
+}
+
+function getSearchTerm(req) {
+    const search = String(req.query.search || "").trim();
+    return search.length > 100 ? search.slice(0, 100) : search;
+}
+
+function createRateLimiter({ windowMs, max, message }) {
+    const clients = new Map();
+    const cleanupInterval = setInterval(() => {
+        const now = Date.now();
+        for (const [key, entry] of clients) {
+            if (entry.resetAt <= now) clients.delete(key);
+        }
+    }, windowMs);
+    cleanupInterval.unref();
+
+    return (req, res, next) => {
+        const key = req.ip || req.socket.remoteAddress || "unknown";
+        const now = Date.now();
+        let entry = clients.get(key);
+        if (!entry || entry.resetAt <= now) {
+            entry = { count: 0, resetAt: now + windowMs };
+            clients.set(key, entry);
+        }
+
+        entry.count += 1;
+        if (entry.count > max) {
+            res.setHeader("Retry-After", Math.ceil((entry.resetAt - now) / 1000));
+            return res.status(429).json({ status: "error", message });
+        }
+
+        return next();
+    };
+}
+
+function getResultGrade(marks) {
+    if (!Number.isFinite(Number(marks))) return "F";
+    const score = Number(marks);
+    if (score >= 90) return "O";
+    if (score >= 85) return "A+";
+    if (score >= 75) return "A";
+    if (score >= 65) return "B+";
+    if (score >= 55) return "B";
+    if (score >= 45) return "C";
+    return "F";
+}
+
+function getGradePoint(grade) {
+    const map = {
+        O: 10,
+        "A+": 9,
+        A: 8,
+        "B+": 7,
+        B: 6,
+        C: 5,
+        F: 0
+    };
+    return Number(map[grade] || 0);
+}
+
+function derivePassStatus(totalMarks) {
+    return Number(totalMarks) >= 40 ? "Pass" : "Fail";
+}
+
+function ensureResultSeedData() {
+    const existingCount = db.prepare(`SELECT COUNT(*) AS count FROM result_records`).get().count;
+    const failCount = db.prepare(`SELECT COUNT(*) AS count FROM result_records WHERE pass_status = 'Fail'`).get().count;
+
+    if (existingCount > 0 && failCount > 0) return;
+
+    if (existingCount > 0) {
+        db.prepare(`DELETE FROM result_records`).run();
+    }
+
+    const studentIds = db.prepare(`SELECT id FROM students ORDER BY id ASC`).all().map((row) => row.id);
+    const adminUserIds = db.prepare(`SELECT id FROM users ORDER BY id ASC`).all().map((row) => row.id);
+    const createdBy = adminUserIds.length ? adminUserIds[0] : null;
+
+    if (!studentIds.length) {
+        console.log("Result seed skipped: no student records available yet.");
+        return;
+    }
+
+    const academicYear = "2026-27";
+    const departments = ["CSE", "ECE", "EEE", "ME", "CE"];
+    const yearLabels = [1, 2, 3, 4];
+    const subjectMap = {
+        CSE: ["Data Structures", "DBMS", "Operating Systems", "Java Programming", "Computer Networks"],
+        ECE: ["Digital Electronics", "Signals and Systems", "Microprocessors", "Communication Systems", "VLSI"],
+        EEE: ["Power Systems", "Electrical Machines", "Control Systems", "Digital Logic", "EMI"],
+        ME: ["Thermodynamics", "Machine Design", "Manufacturing Tech", "Fluid Mechanics", "Heat Transfer"],
+        CE: ["Surveying", "Structural Analysis", "Geotechnical Engg", "Hydraulics", "Concrete Tech"]
+    };
+
+    let counter = 0;
+    for (const department of departments) {
+        for (const year of yearLabels) {
+            for (const semester of [1, 2, 3, 4, 5, 6, 7, 8]) {
+                const sections = ["A", "B", "C"];
+                for (const section of sections) {
+                    for (let studentIndex = 1; studentIndex <= 18; studentIndex += 1) {
+                        counter += 1;
+                        const studentId = studentIds[(counter - 1) % studentIds.length];
+                        const subjectList = subjectMap[department] || subjectMap.CSE;
+                        for (let i = 0; i < subjectList.length; i += 1) {
+                            const subjectName = subjectList[i];
+                            const internal = 18 + ((counter + i + studentIndex) % 25);
+                            const external = 28 + ((counter + i * 3 + studentIndex) % 38);
+                            const shouldFail = (section === "A" && studentIndex > 16)
+                                || (section === "B" && studentIndex > 13);
+                            const total = shouldFail
+                                ? Math.min(100, Math.max(22, internal + external - 38))
+                                : Math.min(100, Math.max(48, internal + external));
+                            const grade = getResultGrade(total);
+                            const passStatus = derivePassStatus(total);
+                            const backlogStatus = passStatus === "Pass" ? "None" : (i % 2 === 0 ? "Backlog" : "Arrear");
+                            const publicationStatus = i === 0 && counter % 3 === 0 ? "Published" : "Draft";
+                            db.prepare(`
+                                INSERT INTO result_records (
+                                    student_id, department, year, semester, section, academic_year,
+                                    subject, subject_code, internal_marks, external_marks, total_marks,
+                                    grade, grade_point, pass_status, backlog_status, result_status,
+                                    publication_status, created_by, created_at, updated_at
+                                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                            `).run(
+                                studentId,
+                                department,
+                                year,
+                                semester,
+                                section,
+                                academicYear,
+                                subjectName,
+                                `${department}-${semester}-${String(i + 1).padStart(2, "0")}`,
+                                internal,
+                                external,
+                                total,
+                                grade,
+                                getGradePoint(grade),
+                                passStatus,
+                                backlogStatus,
+                                "Reviewed",
+                                publicationStatus,
+                                createdBy
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+const apiRateLimiter = createRateLimiter({
+    windowMs: 60 * 1000,
+    max: 240,
+    message: "Too many requests. Please try again shortly."
+});
+
+app.use("/api", apiRateLimiter);
 
 
 // Serve frontend files
@@ -112,6 +291,8 @@ function ensureStudentProfileColumns() {
         ["profile_photo", "TEXT"],
         ["linkedin_url", "TEXT"],
         ["github_url", "TEXT"],
+        ["instagram_url", "TEXT"],
+        ["other_link_url", "TEXT"],
         ["portfolio_url", "TEXT"]
     ];
 
@@ -137,6 +318,103 @@ function ensureAuditLogColumns() {
             db.exec(`ALTER TABLE audit_logs ADD COLUMN ${columnName} ${columnType};`);
         }
     });
+}
+
+function ensureColumn(tableName, columnName, columnType) {
+    const columns = db.prepare(`PRAGMA table_info(${tableName})`).all();
+    if (!columns.some((column) => column.name === columnName)) {
+        db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${columnType}`);
+    }
+}
+
+function migrateLegacyModuleColumns() {
+    const migrations = [
+        ["notifications", "branch", "TEXT"],
+        ["notifications", "year", "INTEGER"],
+        ["notifications", "section", "TEXT"],
+        ["departments", "code", "TEXT"],
+        ["departments", "name", "TEXT"],
+        ["academic_years", "name", "TEXT"],
+        ["academic_years", "label", "TEXT"],
+        ["academic_years", "starts_on", "TEXT"],
+        ["academic_years", "ends_on", "TEXT"],
+        ["academic_years", "is_active", "INTEGER DEFAULT 0"],
+        ["documents", "student_id", "INTEGER"],
+        ["documents", "title", "TEXT"],
+        ["documents", "category", "TEXT"],
+        ["documents", "file_path", "TEXT"],
+        ["documents", "uploaded_by", "INTEGER"],
+        ["documents", "created_at", "DATETIME"],
+        ["documents", "visibility", "TEXT DEFAULT 'Private'"],
+        ["leave_requests", "starts_on", "TEXT"],
+        ["leave_requests", "ends_on", "TEXT"],
+        ["leave_requests", "reviewer_remarks", "TEXT"],
+        ["leave_requests", "reviewed_by", "INTEGER"],
+        ["leave_requests", "reviewed_at", "DATETIME"],
+        ["assignments", "deadline", "TEXT"],
+        ["assignments", "attachment_path", "TEXT"],
+        ["assignments", "assigned_by", "INTEGER"],
+        ["assignment_submissions", "status", "TEXT DEFAULT 'Pending'"],
+        ["buses", "route", "TEXT"],
+        ["buses", "driver_name", "TEXT"],
+        ["buses", "driver_mobile", "TEXT"],
+        ["buses", "bus_fee", "REAL"],
+        ["buses", "academic_year", "TEXT"],
+        ["buses", "available", "INTEGER DEFAULT 1"],
+        ["bus_stops", "arrival_time", "TEXT"],
+        ["bus_stops", "sequence_number", "INTEGER"],
+        ["student_bus_assignments", "payment_status", "TEXT DEFAULT 'Pending'"],
+        ["student_bus_assignments", "created_at", "DATETIME"]
+    ];
+
+    migrations.forEach(([tableName, columnName, columnType]) => {
+        ensureColumn(tableName, columnName, columnType);
+    });
+
+    db.exec(`
+        UPDATE departments
+        SET code = COALESCE(code, CASE name
+            WHEN 'Computer Science and Engineering' THEN 'CSE'
+            WHEN 'Electronics and Communication Engineering' THEN 'ECE'
+            WHEN 'Electrical and Electronics Engineering' THEN 'EEE'
+            WHEN 'Mechanical Engineering' THEN 'ME'
+            WHEN 'Civil Engineering' THEN 'CE'
+            ELSE UPPER(SUBSTR(name, 1, 3))
+        END);
+
+        UPDATE academic_years
+        SET label = COALESCE(label, name),
+            is_active = COALESCE(is_active, 0);
+
+        UPDATE documents
+        SET title = COALESCE(title, document_name),
+            category = COALESCE(category, document_type),
+            file_path = COALESCE(file_path, file_url),
+            uploaded_by = COALESCE(uploaded_by, user_id),
+            created_at = COALESCE(created_at, uploaded_at),
+            student_id = COALESCE(
+                student_id,
+                (SELECT s.id FROM students s WHERE s.user_id = documents.user_id)
+            ),
+            visibility = COALESCE(visibility, 'Private');
+
+        UPDATE leave_requests
+        SET starts_on = COALESCE(starts_on, from_date),
+            ends_on = COALESCE(ends_on, to_date),
+            reviewer_remarks = COALESCE(reviewer_remarks, response);
+
+        UPDATE assignments
+        SET deadline = COALESCE(deadline, due_date),
+            attachment_path = COALESCE(attachment_path, attachment_url),
+            assigned_by = COALESCE(assigned_by, faculty_id);
+
+        UPDATE buses
+        SET route = COALESCE(route, route_name),
+            available = CASE
+                WHEN available IS NULL THEN CASE WHEN status = 'Active' THEN 1 ELSE 0 END
+                ELSE available
+            END;
+    `);
 }
 
 try {
@@ -165,6 +443,7 @@ try {
 
     ensureStudentProfileColumns();
     ensureAuditLogColumns();
+    migrateLegacyModuleColumns();
 
 } catch (error) {
 
@@ -284,6 +563,7 @@ try {
 
     console.log("app_settings table ready.");
 
+    ensureResultSeedData();
     ensureDemoAccounts();
 
 } catch (error) {
@@ -594,8 +874,208 @@ async function ensureDemoAccounts() {
                 `).run("Mid-Semester Review", "Parents can now review attendance and marks from the dashboard.", "Parents", 0);
             }
         }
+
+        await ensureDemoData();
     } catch (error) {
         console.error("Demo account setup error:", error);
+    }
+}
+
+async function ensureDemoData() {
+    const departments = [
+        ["CSE", "Computer Science and Engineering"],
+        ["ECE", "Electronics and Communication Engineering"],
+        ["EEE", "Electrical and Electronics Engineering"],
+        ["ME", "Mechanical Engineering"],
+        ["CE", "Civil Engineering"]
+    ];
+    const insertDepartment = db.prepare(`
+        INSERT OR IGNORE INTO departments (code, name) VALUES (?, ?)
+    `);
+    departments.forEach((department) => insertDepartment.run(...department));
+
+    db.prepare(`
+        INSERT OR IGNORE INTO academic_years (name, label, starts_on, ends_on, is_active)
+        VALUES ('2026-27', '2026-27', '2026-07-01', '2027-06-30', 1)
+    `).run();
+
+    const studentNames = [
+        "Aarav Mehta", "Ananya Rao", "Arjun Nair", "Diya Reddy", "Ishaan Varma",
+        "Kavya Menon", "Manish Patel", "Nisha Iyer", "Rohan Das", "Saanvi Shah",
+        "Tanmay Joshi", "Veda Krishnan", "Yash Kulkarni", "Zoya Khan", "Aditya Sen",
+        "Bhavana Rao", "Charan Dev", "Harini Goud", "Kiran Babu", "Meera Paul"
+    ];
+    const departmentCodes = ["CSE", "ECE", "EEE", "ME", "CE"];
+    const insertUser = db.prepare(`
+        INSERT OR IGNORE INTO users (username, password, role) VALUES (?, ?, 'student')
+    `);
+    const insertStudent = db.prepare(`
+        INSERT OR IGNORE INTO students
+            (user_id, student_id, roll_number, full_name, email, mobile, department, year,
+             section, academic_year, fee_category, parent_name, parent_mobile, parent_email)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '2026-27', 'Management', ?, ?, ?)
+    `);
+    const studentPasswordHash = await bcrypt.hash("student123", 10);
+
+    studentNames.forEach((fullName, index) => {
+        const studentCode = `STU-${1002 + index}`;
+        insertUser.run(`demo_${studentCode.toLowerCase()}`, studentPasswordHash);
+        const user = db.prepare("SELECT id FROM users WHERE username = ?").get(`demo_${studentCode.toLowerCase()}`);
+        const department = departmentCodes[index % departmentCodes.length];
+        const year = (index % 4) + 1;
+        insertStudent.run(
+            user.id,
+            studentCode,
+            studentCode,
+            fullName,
+            `${studentCode.toLowerCase()}@demo.khit.edu.in`,
+            `987650${String(1000 + index).slice(-4)}`,
+            department,
+            year,
+            index % 2 === 0 ? "A" : "B",
+            `Demo Parent ${index + 1}`,
+            `986650${String(1000 + index).slice(-4)}`,
+            `parent${index + 1}@demo.khit.edu.in`
+        );
+    });
+
+    const facultyNames = [
+        "Dr. Neha Kapoor", "Prof. Vikram Rao", "Dr. Meena Iyer", "Prof. Suresh Babu",
+        "Dr. Ritu Sharma", "Prof. Karthik Nair", "Dr. Asha Menon", "Prof. Rahul Das",
+        "Dr. Pooja Sen", "Prof. Naveen Kumar"
+    ];
+    const insertFacultyUser = db.prepare(`
+        INSERT OR IGNORE INTO users (username, password, role) VALUES (?, ?, 'faculty')
+    `);
+    const insertFaculty = db.prepare(`
+        INSERT OR IGNORE INTO faculty
+            (user_id, faculty_id, full_name, department, designation, email, mobile)
+        VALUES (?, ?, ?, ?, 'Assistant Professor', ?, ?)
+    `);
+    const facultyPasswordHash = await bcrypt.hash("faculty123", 10);
+    facultyNames.forEach((fullName, index) => {
+        const facultyCode = `FAC-${1002 + index}`;
+        const username = `demo_${facultyCode.toLowerCase()}`;
+        insertFacultyUser.run(username, facultyPasswordHash);
+        const user = db.prepare("SELECT id FROM users WHERE username = ?").get(username);
+        insertFaculty.run(
+            user.id,
+            facultyCode,
+            fullName,
+            departmentCodes[index % departmentCodes.length],
+            `${username}@demo.khit.edu.in`,
+            `998870${String(1000 + index).slice(-4)}`
+        );
+    });
+
+    const subjectRows = [
+        ["Data Structures", "CSE-201", "CSE", 2], ["Database Systems", "CSE-202", "CSE", 2],
+        ["Digital Electronics", "ECE-201", "ECE", 2], ["Circuit Theory", "EEE-201", "EEE", 2],
+        ["Engineering Mechanics", "ME-201", "ME", 2], ["Surveying", "CE-201", "CE", 2]
+    ];
+    const insertSubject = db.prepare(`
+        INSERT INTO subjects (name, code, department, year, semester, section)
+        SELECT ?, ?, ?, ?, 3, 'A'
+        WHERE NOT EXISTS (SELECT 1 FROM subjects WHERE code = ?)
+    `);
+    subjectRows.forEach((subject) => insertSubject.run(...subject, subject[1]));
+
+    const students = db.prepare("SELECT id, student_id, department, year, section FROM students WHERE student_id LIKE 'STU-%' ORDER BY id").all();
+    const subjects = db.prepare("SELECT id, name FROM subjects ORDER BY id").all();
+    const faculty = db.prepare("SELECT id, user_id FROM faculty ORDER BY id").all();
+    const insertFee = db.prepare(`
+        INSERT INTO fees (student_id, academic_year, fee_year, total_amount, paid_amount, pending_amount, status)
+        SELECT ?, '2026-27', ?, 45000, 30000, 15000, 'Partial'
+        WHERE NOT EXISTS (SELECT 1 FROM fees WHERE student_id = ? AND academic_year = '2026-27' AND fee_year = ?)
+    `);
+    const insertAttendance = db.prepare(`
+        INSERT INTO attendance (student_id, subject, attendance_date, status)
+        SELECT ?, ?, ?, ?
+        WHERE NOT EXISTS (SELECT 1 FROM attendance WHERE student_id = ? AND subject = ? AND attendance_date = ?)
+    `);
+    const insertMark = db.prepare(`
+        INSERT INTO marks (student_id, subject_id, exam_type, marks, max_marks, exam_date)
+        SELECT ?, ?, 'Midterm', ?, 100, '2026-09-15'
+        WHERE NOT EXISTS (SELECT 1 FROM marks WHERE student_id = ? AND subject_id = ? AND exam_type = 'Midterm')
+    `);
+    students.forEach((student, index) => {
+        insertFee.run(student.id, student.year, student.id, student.year);
+        const subject = subjects[index % subjects.length];
+        const attendanceStatus = index % 5 === 0 ? "Absent" : "Present";
+        insertAttendance.run(student.id, subject.name, "2026-09-10", attendanceStatus, student.id, subject.name, "2026-09-10");
+        const mark = 72 + (index % 24);
+        insertMark.run(student.id, subject.id, mark, student.id, subject.id);
+    });
+
+    db.prepare(`
+        INSERT INTO events (title, description, event_date, venue)
+        SELECT 'Demo Tech Symposium', 'Fictional sample event for portal testing.', '2026-11-12', 'Main Auditorium'
+        WHERE NOT EXISTS (SELECT 1 FROM events WHERE title = 'Demo Tech Symposium')
+    `).run();
+    db.prepare(`
+        INSERT INTO study_materials (title, description, material_type, file_url, subject, department, year, section)
+        SELECT 'Data Structures Unit 1', 'Fictional demo study material.', 'Document', NULL, name, 'CSE', 2, 'A'
+        FROM subjects
+        WHERE code = 'CSE-201'
+          AND NOT EXISTS (SELECT 1 FROM study_materials WHERE title = 'Data Structures Unit 1')
+    `).run();
+
+    const assignmentSubject = db.prepare("SELECT id FROM subjects WHERE code = 'CSE-201'").get();
+    if (assignmentSubject) {
+        db.prepare(`
+            INSERT INTO assignments (subject_id, title, description, deadline, assigned_by)
+            SELECT ?, 'Demo Linked List Assignment', 'Fictional sample assignment.', '2026-10-15', ?
+            WHERE NOT EXISTS (SELECT 1 FROM assignments WHERE title = 'Demo Linked List Assignment')
+        `).run(assignmentSubject.id, faculty[0] ? faculty[0].user_id : null);
+    }
+
+    db.exec(`
+        DELETE FROM events WHERE title = 'Demo Tech Symposium'
+            AND id NOT IN (SELECT MIN(id) FROM events WHERE title = 'Demo Tech Symposium');
+        DELETE FROM study_materials WHERE title = 'Data Structures Unit 1'
+            AND id NOT IN (SELECT MIN(id) FROM study_materials WHERE title = 'Data Structures Unit 1');
+        DELETE FROM assignments WHERE title = 'Demo Linked List Assignment'
+            AND id NOT IN (SELECT MIN(id) FROM assignments WHERE title = 'Demo Linked List Assignment');
+        DELETE FROM fees
+            WHERE academic_year = '2026-27' AND total_amount = 45000
+              AND paid_amount = 30000 AND pending_amount = 15000
+              AND id NOT IN (
+                  SELECT MIN(id) FROM fees
+                  WHERE academic_year = '2026-27' AND total_amount = 45000
+                    AND paid_amount = 30000 AND pending_amount = 15000
+                  GROUP BY student_id, fee_year
+              );
+        DELETE FROM attendance
+            WHERE attendance_date = '2026-09-10'
+              AND id NOT IN (
+                  SELECT MIN(id) FROM attendance
+                  WHERE attendance_date = '2026-09-10'
+                  GROUP BY student_id, subject
+              );
+        DELETE FROM marks
+            WHERE exam_type = 'Midterm' AND exam_date = '2026-09-15'
+              AND id NOT IN (
+                  SELECT MIN(id) FROM marks
+                  WHERE exam_type = 'Midterm' AND exam_date = '2026-09-15'
+                  GROUP BY student_id, subject_id
+              );
+    `);
+
+    const bus = db.prepare(`
+        INSERT OR IGNORE INTO buses (bus_number, route, driver_name, driver_mobile, bus_fee, academic_year)
+        VALUES ('DEMO-01', 'Central Campus Loop', 'Demo Driver', '9000000001', 12000, '2026-27')
+    `).run();
+    const busRow = db.prepare("SELECT id FROM buses WHERE bus_number = 'DEMO-01'").get();
+    db.prepare(`
+        INSERT OR IGNORE INTO bus_stops (bus_id, stop_name, pickup_time, arrival_time, sequence_number)
+        VALUES (?, 'Demo City Center', '07:30', '08:15', 1)
+    `).run(busRow.id);
+    const stop = db.prepare("SELECT id FROM bus_stops WHERE bus_id = ? ORDER BY id LIMIT 1").get(busRow.id);
+    if (students[0] && stop) {
+        db.prepare(`
+            INSERT OR IGNORE INTO student_bus_assignments (student_id, bus_id, stop_id, academic_year, payment_status)
+            VALUES (?, ?, ?, '2026-27', 'Pending')
+        `).run(students[0].id, busRow.id, stop.id);
     }
 }
 
@@ -631,6 +1111,44 @@ function getTokenFromRequest(req) {
 
     return auth.substring(7);
 
+}
+
+function normalizeOptionalHttpUrl(value) {
+    const rawValue = String(value || "").trim();
+    if (!rawValue) return null;
+    if (rawValue.length > 2048) return null;
+
+    try {
+        const parsed = new URL(rawValue);
+        if (!['http:', 'https:'].includes(parsed.protocol) || !parsed.hostname) {
+            return null;
+        }
+        return parsed.toString();
+    } catch (error) {
+        return null;
+    }
+}
+
+function validateOptionalProfileLinks(payload) {
+    const fields = ["linkedin_url", "github_url", "instagram_url", "other_link_url", "portfolio_url"];
+    const links = {};
+
+    for (const field of fields) {
+        if (!Object.prototype.hasOwnProperty.call(payload, field)) continue;
+        const rawValue = String(payload[field] || "").trim();
+        if (!rawValue) {
+            links[field] = null;
+            continue;
+        }
+
+        const normalizedValue = normalizeOptionalHttpUrl(rawValue);
+        if (!normalizedValue) {
+            return { error: `${field} must be a valid HTTP or HTTPS URL` };
+        }
+        links[field] = normalizedValue;
+    }
+
+    return { links };
 }
 
 
@@ -845,19 +1363,35 @@ app.get(
     (req, res) => {
 
         try {
+            const { page, limit, offset } = getPagination(req);
+            const search = getSearchTerm(req);
+            const where = search
+                ? "WHERE d.title LIKE ? OR d.category LIKE ?"
+                : "";
+            const searchParams = search ? [`%${search}%`, `%${search}%`] : [];
 
             const documents = db.prepare(`
                 SELECT
                     d.*,
-                    u.username
+                    u.username,
+                    d.title AS document_name,
+                    d.category AS document_type,
+                    d.file_path AS file_url,
+                    d.created_at AS uploaded_at
                 FROM documents d
-                LEFT JOIN users u ON u.id = d.user_id
-                ORDER BY d.uploaded_at DESC, d.id DESC
-            `).all();
+                LEFT JOIN users u ON u.id = d.uploaded_by
+                ${where}
+                ORDER BY d.created_at DESC, d.id DESC
+                LIMIT ? OFFSET ?
+            `).all(...searchParams, limit, offset);
+            const total = db.prepare(`
+                SELECT COUNT(*) AS total FROM documents d ${where}
+            `).get(...searchParams).total;
 
             return res.json({
                 status: "success",
-                documents
+                documents,
+                pagination: { page, limit, total, total_pages: Math.ceil(total / limit) }
             });
 
         } catch (error) {
@@ -889,9 +1423,16 @@ app.post(
                 });
             }
 
-            const documentName = String(req.body.document_name || "").trim();
-            const documentType = String(req.body.document_type || "Other").trim();
-            const userId = req.body.user_id ? Number(req.body.user_id) : null;
+            const documentName = String(req.body.document_name || req.body.title || "").trim();
+            const documentType = String(req.body.document_type || req.body.category || "Other").trim();
+            const requestedStudentId = req.body.student_id ? Number(req.body.student_id) : null;
+            const requestedUserId = req.body.user_id ? Number(req.body.user_id) : null;
+            const studentId = requestedStudentId || (requestedUserId
+                ? (db.prepare("SELECT id FROM students WHERE user_id = ?").get(requestedUserId) || {}).id
+                : null);
+            const visibility = String(req.body.visibility || "Private").trim() === "Public"
+                ? "Public"
+                : "Private";
 
             if (!documentName || !req.file) {
                 return res.status(400).json({
@@ -900,13 +1441,13 @@ app.post(
                 });
             }
 
-            if (userId) {
-                const user = db.prepare("SELECT id FROM users WHERE id = ?").get(userId);
-                if (!user) {
+            if (studentId) {
+                const student = db.prepare("SELECT id FROM students WHERE id = ?").get(studentId);
+                if (!student) {
                     fs.unlinkSync(req.file.path);
                     return res.status(404).json({
                         status: "error",
-                        message: "Target user not found"
+                        message: "Target student not found"
                     });
                 }
             }
@@ -916,9 +1457,9 @@ app.post(
                 const fileUrl = `/uploads/${req.file.filename}`;
                 const result = db.prepare(`
                     INSERT INTO documents
-                        (user_id, document_name, document_type, file_url)
-                    VALUES (?, ?, ?, ?)
-                `).run(userId, documentName, documentType, fileUrl);
+                        (student_id, title, category, file_path, uploaded_by, visibility, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                `).run(studentId, documentName, documentType, fileUrl, req.user.id, visibility);
 
                 db.prepare(`
                     INSERT INTO audit_logs (user_id, action, entity_type, entity_id, metadata)
@@ -928,7 +1469,7 @@ app.post(
                     "UPLOAD",
                     "document",
                     result.lastInsertRowid,
-                    JSON.stringify({ documentName, documentType, userId, fileUrl })
+                    JSON.stringify({ documentName, documentType, studentId, visibility, fileUrl })
                 );
 
                 return res.status(201).json({
@@ -950,6 +1491,38 @@ app.post(
     }
 );
 
+app.delete(
+    "/api/admin/documents/:id",
+    authenticateToken,
+    requireAdmin,
+    (req, res) => {
+        try {
+            const documentId = Number(req.params.id);
+            const document = db.prepare(`
+                SELECT file_path
+                FROM documents
+                WHERE id = ?
+            `).get(documentId);
+
+            if (!document) {
+                return res.status(404).json({ status: "error", message: "Document not found" });
+            }
+
+            const result = db.prepare("DELETE FROM documents WHERE id = ?").run(documentId);
+            if (result.changes && document.file_path) {
+                const filePath = path.join(__dirname, document.file_path.replace(/^\/+/, ""));
+                if (filePath.startsWith(uploadDirectory) && fs.existsSync(filePath)) {
+                    fs.unlinkSync(filePath);
+                }
+            }
+
+            return res.json({ status: "success", message: "Document deleted" });
+        } catch (error) {
+            console.error("Admin document delete error:", error);
+            return res.status(500).json({ status: "error", message: "Unable to delete document" });
+        }
+    }
+);
 
 // ============================================================
 // APP SETTINGS
@@ -1111,7 +1684,14 @@ app.get("/api/demo-credentials", async (req, res) => {
             demoAccounts: {
                 admin: {
                     username: ALLOWED_ADMIN_USERNAME,
-                    password: ALLOWED_ADMIN_PASSWORD,
+                    role: "admin"
+                },
+                faculty: {
+                    username: "faculty",
+                    password: "faculty123",
+                    role: "faculty"
+                },
+                student: {
                     username: "student",
                     password: "student123",
                     role: "student",
@@ -1770,7 +2350,12 @@ app.post(
                 state,
                 pincode,
 
-                profile_photo
+                profile_photo,
+                linkedin_url,
+                github_url,
+                instagram_url,
+                other_link_url,
+                portfolio_url
 
             } = req.body;
 
@@ -1797,6 +2382,21 @@ app.post(
 
                 });
 
+            }
+
+            const registrationLinks = validateOptionalProfileLinks({
+                linkedin_url,
+                github_url,
+                instagram_url,
+                other_link_url,
+                portfolio_url
+            });
+
+            if (registrationLinks.error) {
+                return res.status(400).json({
+                    status: "error",
+                    message: registrationLinks.error
+                });
             }
 
 
@@ -1830,8 +2430,8 @@ app.post(
                 db.prepare(`
                     SELECT id
                     FROM students
-                    WHERE student_id = ?
-                `).get(normalizedStudentId);
+                    WHERE student_id = ? OR roll_number = ?
+                `).get(normalizedStudentId, normalizedRollNumber);
 
 
             if (existingStudent) {
@@ -1904,11 +2504,21 @@ app.post(
                     district,
                     state,
                     pincode,
-                    profile_photo
+                    profile_photo,
+                    linkedin_url,
+                    github_url,
+                    instagram_url,
+                    other_link_url,
+                    portfolio_url
                 )
 
                 VALUES
                 (
+                    ?,
+                    ?,
+                    ?,
+                    ?,
+                    ?,
                     ?,
                     ?,
                     ?,
@@ -1964,19 +2574,42 @@ app.post(
                 state || null,
                 pincode || null,
 
-                profile_photo || null
+                profile_photo || null,
+                registrationLinks.links.linkedin_url || null,
+                registrationLinks.links.github_url || null,
+                registrationLinks.links.instagram_url || null,
+                registrationLinks.links.other_link_url || null,
+                registrationLinks.links.portfolio_url || null
 
             );
 
+
+            const registeredStudent = db.prepare(`
+                SELECT id, student_id, full_name, department, year, section, academic_year
+                FROM students
+                WHERE user_id = ?
+            `).get(userId);
+
+            const token = generateToken({
+                id: userId,
+                username,
+                role: "student"
+            });
 
             return res.status(201).json({
 
                 status: "success",
 
                 message:
-                    "Student registration successful",
+                    "Student registration successful. You are now logged in.",
 
-                student_id
+                token,
+                user: {
+                    id: userId,
+                    username,
+                    role: "student"
+                },
+                student: registeredStudent
 
             });
 
@@ -2683,18 +3316,42 @@ app.get(
     (req, res) => {
 
         try {
+            const { page, limit, offset } = getPagination(req);
+            const search = getSearchTerm(req);
+            const department = String(req.query.department || "").trim().slice(0, 80);
+            const where = [];
+            const params = [];
+
+            if (search) {
+                where.push("(s.full_name LIKE ? OR s.student_id LIKE ? OR s.roll_number LIKE ? OR s.email LIKE ?)");
+                const pattern = `%${search}%`;
+                params.push(pattern, pattern, pattern, pattern);
+            }
+            if (department) {
+                where.push("s.department = ?");
+                params.push(department);
+            }
+            const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
 
             const students = db.prepare(`
                 SELECT s.*, u.username
                 FROM students s
                 LEFT JOIN users u ON u.id = s.user_id
+                ${whereSql}
                 ORDER BY s.id DESC
-            `).all();
+                LIMIT ? OFFSET ?
+            `).all(...params, limit, offset);
+            const total = db.prepare(`
+                SELECT COUNT(*) AS total
+                FROM students s
+                ${whereSql}
+            `).get(...params).total;
 
             return res.json({
                 status: "success",
-                count: students.length,
-                students
+                count: total,
+                students,
+                pagination: { page, limit, total, total_pages: Math.ceil(total / limit) }
             });
 
         } catch (error) {
@@ -2847,6 +3504,14 @@ app.get(
     (req, res) => {
 
         try {
+            const { page, limit, offset } = getPagination(req);
+            const search = getSearchTerm(req);
+            const where = search
+                ? "WHERE full_name LIKE ? OR faculty_id LIKE ? OR email LIKE ?"
+                : "";
+            const searchParams = search
+                ? [`%${search}%`, `%${search}%`, `%${search}%`]
+                : [];
 
             const faculty = db.prepare(`
                 SELECT
@@ -2859,13 +3524,19 @@ app.get(
                     mobile,
                     created_at
                 FROM faculty
+                ${where}
                 ORDER BY id DESC
-            `).all();
+                LIMIT ? OFFSET ?
+            `).all(...searchParams, limit, offset);
+            const total = db.prepare(`
+                SELECT COUNT(*) AS total FROM faculty ${where}
+            `).get(...searchParams).total;
 
             return res.json({
                 status: "success",
-                count: faculty.length,
-                faculty
+                count: total,
+                faculty,
+                pagination: { page, limit, total, total_pages: Math.ceil(total / limit) }
             });
 
         } catch (error) {
@@ -3013,6 +3684,14 @@ app.get(
     (req, res) => {
 
         try {
+            const { page, limit, offset } = getPagination(req);
+            const search = getSearchTerm(req);
+            const where = search
+                ? "WHERE s.full_name LIKE ? OR s.student_id LIKE ? OR s.roll_number LIKE ?"
+                : "";
+            const searchParams = search
+                ? [`%${search}%`, `%${search}%`, `%${search}%`]
+                : [];
 
             const fees = db.prepare(`
                 SELECT
@@ -3022,8 +3701,17 @@ app.get(
                     s.roll_number
                 FROM fees f
                 LEFT JOIN students s ON s.id = f.student_id
+                ${where}
                 ORDER BY f.id DESC
-            `).all();
+                LIMIT ? OFFSET ?
+            `).all(...searchParams, limit, offset);
+
+            const total = db.prepare(`
+                SELECT COUNT(*) AS total
+                FROM fees f
+                LEFT JOIN students s ON s.id = f.student_id
+                ${where}
+            `).get(...searchParams).total;
 
             const summary = db.prepare(`
                 SELECT
@@ -3037,7 +3725,8 @@ app.get(
             return res.json({
                 status: "success",
                 fees,
-                summary
+                summary,
+                pagination: { page, limit, total, total_pages: Math.ceil(total / limit) }
             });
 
         } catch (error) {
@@ -3243,8 +3932,8 @@ app.post(
             }
 
             const result = db.prepare(`
-                INSERT INTO buses (bus_number, route_name, status)
-                VALUES (?, ?, 'Active')
+                INSERT INTO buses (bus_number, route)
+                VALUES (?, ?)
             `).run(busNumber, routeName || null);
 
             db.prepare(`
@@ -3839,16 +4528,30 @@ app.patch(
                 "profile_photo",
                 "linkedin_url",
                 "github_url",
+                "instagram_url",
+                "other_link_url",
                 "portfolio_url"
             ];
 
             const payload = req.body || {};
             const updates = {};
 
+            const profileLinks = validateOptionalProfileLinks(payload);
+            if (profileLinks.error) {
+                return res.status(400).json({
+                    status: "error",
+                    message: profileLinks.error
+                });
+            }
+
             allowedFields.forEach((field) => {
                 if (Object.prototype.hasOwnProperty.call(payload, field)) {
-                    const value = payload[field];
-                    updates[field] = value === "" || value === null || value === undefined ? null : String(value).trim();
+                    if (Object.prototype.hasOwnProperty.call(profileLinks.links, field)) {
+                        updates[field] = profileLinks.links[field];
+                    } else {
+                        const value = payload[field];
+                        updates[field] = value === "" || value === null || value === undefined ? null : String(value).trim();
+                    }
                 }
             });
 
@@ -4181,8 +4884,8 @@ app.get(
                 SELECT
                     a.*,
                     b.bus_number,
-                    b.route_name,
-                    b.status AS bus_status,
+                    b.route,
+                    b.available AS bus_available,
                     s.stop_name,
                     s.pickup_time
                 FROM student_bus_assignments a
@@ -4219,17 +4922,21 @@ app.get(
     (req, res) => {
 
         try {
+            const { page, limit, offset } = getPagination(req);
+            const search = getSearchTerm(req);
+            const searchSql = search ? "AND (a.title LIKE ? OR a.description LIKE ? OR s.name LIKE ?)" : "";
+            const searchParams = search ? [`%${search}%`, `%${search}%`, `%${search}%`] : [];
 
             const assignments = db.prepare(`
                 SELECT
                     a.id,
                     a.title,
                     a.description,
-                    a.due_date,
-                    a.attachment_url,
+                    a.deadline AS due_date,
+                    a.attachment_path AS attachment_url,
                     s.name AS subject_name,
                     sub.submitted_at,
-                    sub.marks,
+                    sub.status AS submission_status,
                     sub.remarks
                 FROM assignments a
                 LEFT JOIN subjects s ON s.id = a.subject_id
@@ -4240,12 +4947,15 @@ app.get(
                    OR (s.department = (SELECT department FROM students WHERE user_id = ?)
                        AND (s.year IS NULL OR s.year = (SELECT year FROM students WHERE user_id = ?))
                        AND (s.section IS NULL OR s.section = (SELECT section FROM students WHERE user_id = ?)))
-                ORDER BY a.due_date, a.id DESC
-            `).all(req.user.id, req.user.id, req.user.id, req.user.id);
+                ${searchSql}
+                ORDER BY a.deadline, a.id DESC
+                LIMIT ? OFFSET ?
+            `).all(req.user.id, req.user.id, req.user.id, req.user.id, ...searchParams, limit, offset);
 
             return res.json({
                 status: "success",
-                assignments
+                assignments,
+                pagination: { page, limit, returned: assignments.length }
             });
 
         } catch (error) {
@@ -4268,22 +4978,30 @@ app.get(
     (req, res) => {
 
         try {
+            const { page, limit, offset } = getPagination(req);
+            const search = getSearchTerm(req);
+            const searchSql = search ? "AND (title LIKE ? OR category LIKE ?)" : "";
+            const searchParams = search ? [`%${search}%`, `%${search}%`] : [];
 
             const documents = db.prepare(`
                 SELECT
                     id,
-                    document_name,
-                    document_type,
-                    file_url,
-                    uploaded_at
+                    title AS document_name,
+                    category AS document_type,
+                    file_path AS file_url,
+                    created_at AS uploaded_at
                 FROM documents
-                WHERE user_id = ?
-                ORDER BY uploaded_at DESC, id DESC
-            `).all(req.user.id);
+                     WHERE (visibility = 'Public'
+                         OR student_id = (SELECT id FROM students WHERE user_id = ?))
+                ${searchSql}
+                ORDER BY created_at DESC, id DESC
+                LIMIT ? OFFSET ?
+            `).all(req.user.id, ...searchParams, limit, offset);
 
             return res.json({
                 status: "success",
-                documents
+                documents,
+                pagination: { page, limit, returned: documents.length }
             });
 
         } catch (error) {
@@ -4494,11 +5212,12 @@ app.get(
             const requests = db.prepare(`
                 SELECT
                     lr.id,
-                    lr.from_date AS starts_on,
-                    lr.to_date AS ends_on,
+                    lr.starts_on,
+                    lr.ends_on,
                     lr.reason,
                     lr.status,
-                    lr.response,
+                    lr.reviewer_remarks,
+                    lr.reviewer_remarks AS response,
                     lr.created_at
                 FROM leave_requests lr
                 JOIN students s ON s.id = lr.student_id
@@ -4557,7 +5276,7 @@ app.post(
             }
 
             const result = db.prepare(`
-                INSERT INTO leave_requests (student_id, from_date, to_date, reason, status)
+                INSERT INTO leave_requests (student_id, starts_on, ends_on, reason, status)
                 VALUES (?, ?, ?, ?, 'Pending')
             `).run(student.id, startsOn, endsOn, reason);
 
@@ -4629,7 +5348,7 @@ app.patch(
 
             const requestId = Number(req.params.id);
             const status = String(req.body.status || "").trim();
-            const response = String(req.body.response || "").trim();
+            const response = String(req.body.reviewer_remarks || req.body.response || "").trim();
 
             if (!['Approved', 'Rejected', 'Clarification'].includes(status)) {
                 return res.status(400).json({
@@ -4640,9 +5359,9 @@ app.patch(
 
             const result = db.prepare(`
                 UPDATE leave_requests
-                SET status = ?, response = ?
+                SET status = ?, reviewer_remarks = ?, reviewed_by = ?, reviewed_at = CURRENT_TIMESTAMP
                 WHERE id = ?
-            `).run(status, response || null, requestId);
+            `).run(status, response || null, req.user.id, requestId);
 
             if (!result.changes) {
                 return res.status(404).json({
@@ -4808,6 +5527,7 @@ app.get(
     (req, res) => {
 
         try {
+            const { page, limit, offset } = getPagination(req);
 
             const student = db.prepare(`
                 SELECT id
@@ -4835,11 +5555,13 @@ app.get(
                 LEFT JOIN subjects s ON s.id = m.subject_id
                 WHERE m.student_id = ?
                 ORDER BY m.exam_date DESC, m.id DESC
-            `).all(student.id);
+                LIMIT ? OFFSET ?
+            `).all(student.id, limit, offset);
 
             return res.json({
                 status: "success",
-                marks
+                marks,
+                pagination: { page, limit, returned: marks.length }
             });
 
         } catch (error) {
@@ -4867,6 +5589,10 @@ app.get(
     (req, res) => {
 
         try {
+            const { page, limit, offset } = getPagination(req);
+            const search = getSearchTerm(req);
+            const searchSql = search ? "AND (n.title LIKE ? OR n.message LIKE ?)" : "";
+            const searchParams = search ? [`%${search}%`, `%${search}%`] : [];
 
             const student = db.prepare(`
                 SELECT *
@@ -4909,7 +5635,9 @@ app.get(
                     OR (n.audience = 'Branch + Section' AND n.branch = ? AND n.section = ?)
                     OR (n.audience = 'Year + Section' AND n.year = ? AND n.section = ?)
                 )
+                ${searchSql}
                 ORDER BY n.created_at DESC
+                LIMIT ? OFFSET ?
             `).all(
                 student.id,
                 student.department,
@@ -4920,14 +5648,18 @@ app.get(
                 student.department,
                 student.section,
                 student.year,
-                student.section
+                student.section,
+                ...searchParams,
+                limit,
+                offset
             );
 
             return res.json({
                 status: "success",
                 count: notifications.length,
                 unread_count: notifications.filter((notification) => Number(notification.is_read) === 0).length,
-                notifications
+                notifications,
+                pagination: { page, limit, returned: notifications.length }
             });
 
         } catch (error) {
@@ -5061,6 +5793,349 @@ app.patch(
 // ADMIN NOTIFICATIONS
 // ============================================================
 
+function getResultQueryFilters(req) {
+    const department = String(req.query.department || "").trim();
+    const year = String(req.query.year || "").trim();
+    const semester = String(req.query.semester || "").trim();
+    const section = String(req.query.section || "").trim();
+    const academicYear = String(req.query.academic_year || "").trim();
+    const subject = String(req.query.subject || "").trim();
+    const resultStatus = String(req.query.result_status || "").trim();
+    const publicationStatus = String(req.query.publication_status || "").trim();
+
+    const filters = [];
+    const params = [];
+
+    if (department) { filters.push("r.department = ?"); params.push(department); }
+    if (year) { filters.push("r.year = ?"); params.push(Number(year)); }
+    if (semester) { filters.push("r.semester = ?"); params.push(Number(semester)); }
+    if (section) { filters.push("r.section = ?"); params.push(section); }
+    if (academicYear) { filters.push("r.academic_year = ?"); params.push(academicYear); }
+    if (subject) { filters.push("(LOWER(r.subject) LIKE ? OR LOWER(r.subject_code) LIKE ?)"); params.push(`%${subject.toLowerCase()}%`, `%${subject.toLowerCase()}%`); }
+    if (resultStatus) { filters.push("r.result_status = ?"); params.push(resultStatus); }
+    if (publicationStatus) { filters.push("r.publication_status = ?"); params.push(publicationStatus); }
+
+    return { filters, params };
+}
+
+app.get(
+    "/api/admin/results/analytics",
+    authenticateToken,
+    requireAdmin,
+    (req, res) => {
+        try {
+            const { filters, params } = getResultQueryFilters(req);
+            const whereSql = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
+
+            const studentSummary = db.prepare(`
+                WITH student_outcomes AS (
+                    SELECT
+                        r.student_id,
+                        CASE
+                            WHEN SUM(CASE WHEN r.pass_status = 'Fail' THEN 1 ELSE 0 END) = 0 THEN 'Pass'
+                            ELSE 'Fail'
+                        END AS overall_status
+                    FROM result_records r
+                    ${whereSql}
+                    GROUP BY r.section, r.student_id
+                )
+                SELECT
+                    COUNT(*) AS total_students,
+                    COUNT(*) AS students_appeared,
+                    COUNT(CASE WHEN overall_status = 'Pass' THEN 1 END) AS students_passed,
+                    COUNT(CASE WHEN overall_status = 'Fail' THEN 1 END) AS students_failed
+                FROM student_outcomes
+            `).get(...params);
+
+            const summary = db.prepare(`
+                SELECT
+                    COUNT(*) AS total_result_rows,
+                    AVG(CASE WHEN total_marks IS NOT NULL THEN total_marks ELSE 0 END) AS average_percentage,
+                    MAX(CASE WHEN total_marks IS NOT NULL THEN total_marks ELSE 0 END) AS highest_percentage,
+                    MIN(CASE WHEN total_marks IS NOT NULL THEN total_marks ELSE 0 END) AS lowest_percentage,
+                    AVG(CASE WHEN grade_point IS NOT NULL THEN grade_point ELSE 0 END) AS average_sgpa,
+                    COUNT(DISTINCT CASE WHEN backlog_status IN ('Backlog', 'Arrear') THEN student_id || ':' || subject END) AS backlog_count
+                FROM result_records r
+                ${whereSql}
+            `).get(...params);
+
+            const sections = db.prepare(`
+                WITH student_outcomes AS (
+                    SELECT
+                        r.section AS section,
+                        r.student_id,
+                        CASE
+                            WHEN SUM(CASE WHEN r.pass_status = 'Fail' THEN 1 ELSE 0 END) = 0 THEN 'Pass'
+                            ELSE 'Fail'
+                        END AS overall_status,
+                        AVG(CASE WHEN r.total_marks IS NOT NULL THEN r.total_marks ELSE 0 END) AS avg_marks,
+                        AVG(CASE WHEN r.grade_point IS NOT NULL THEN r.grade_point ELSE 0 END) AS avg_sgpa
+                    FROM result_records r
+                    ${whereSql}
+                    GROUP BY r.section, r.student_id
+                )
+                SELECT
+                    section,
+                    COUNT(DISTINCT student_id) AS students,
+                    COUNT(DISTINCT CASE WHEN overall_status = 'Pass' THEN student_id END) AS passed,
+                    COUNT(DISTINCT CASE WHEN overall_status = 'Fail' THEN student_id END) AS failed,
+                    ROUND(AVG(avg_marks), 2) AS avg_percentage,
+                    ROUND(AVG(avg_sgpa), 2) AS avg_sgpa
+                FROM student_outcomes
+                GROUP BY section
+                ORDER BY section ASC
+            `).all(...params);
+
+            const subjectAnalytics = db.prepare(`
+                SELECT
+                    r.subject AS subject,
+                    MIN(r.subject_code) AS subject_code,
+                    COUNT(DISTINCT r.section || ':' || r.student_id) AS students_appeared,
+                    COUNT(DISTINCT CASE WHEN r.pass_status = 'Pass' THEN r.section || ':' || r.student_id END) AS students_passed,
+                    COUNT(DISTINCT CASE WHEN r.pass_status = 'Fail' THEN r.section || ':' || r.student_id END) AS students_failed,
+                    ROUND(AVG(CASE WHEN r.total_marks IS NOT NULL THEN r.total_marks ELSE 0 END), 2) AS average_marks,
+                    MAX(CASE WHEN r.total_marks IS NOT NULL THEN r.total_marks ELSE 0 END) AS highest_marks,
+                    MIN(CASE WHEN r.total_marks IS NOT NULL THEN r.total_marks ELSE 0 END) AS lowest_marks
+                FROM result_records r
+                ${whereSql}
+                GROUP BY r.subject
+                ORDER BY r.subject ASC
+            `).all(...params);
+
+            const gradeDistribution = db.prepare(`
+                SELECT
+                    r.grade AS grade,
+                    COUNT(*) AS count
+                FROM result_records r
+                ${whereSql}
+                GROUP BY r.grade
+                ORDER BY CASE r.grade
+                    WHEN 'O' THEN 1
+                    WHEN 'A+' THEN 2
+                    WHEN 'A' THEN 3
+                    WHEN 'B+' THEN 4
+                    WHEN 'B' THEN 5
+                    WHEN 'C' THEN 6
+                    ELSE 7
+                END
+            `).all(...params);
+
+            const departmentComparison = db.prepare(`
+                WITH student_outcomes AS (
+                    SELECT
+                        r.department AS department,
+                        r.student_id,
+                        CASE
+                            WHEN SUM(CASE WHEN r.pass_status = 'Fail' THEN 1 ELSE 0 END) = 0 THEN 'Pass'
+                            ELSE 'Fail'
+                        END AS overall_status,
+                        AVG(CASE WHEN r.total_marks IS NOT NULL THEN r.total_marks ELSE 0 END) AS avg_marks,
+                        AVG(CASE WHEN r.grade_point IS NOT NULL THEN r.grade_point ELSE 0 END) AS avg_sgpa
+                    FROM result_records r
+                    ${whereSql}
+                    GROUP BY r.department, r.student_id
+                )
+                SELECT
+                    department,
+                    COUNT(DISTINCT student_id) AS students,
+                    COUNT(DISTINCT CASE WHEN overall_status = 'Pass' THEN student_id END) AS passed,
+                    COUNT(DISTINCT CASE WHEN overall_status = 'Fail' THEN student_id END) AS failed,
+                    ROUND(AVG(avg_marks), 2) AS avg_percentage,
+                    ROUND(AVG(avg_sgpa), 2) AS avg_sgpa
+                FROM student_outcomes
+                GROUP BY department
+                ORDER BY department ASC
+            `).all(...params);
+
+            const summaryTotals = {
+                total_students: Number(studentSummary.total_students || 0),
+                students_appeared: Number(studentSummary.students_appeared || 0),
+                students_passed: Number(studentSummary.students_passed || 0),
+                students_failed: Number(studentSummary.students_failed || 0),
+                average_percentage: Number(Number(summary.average_percentage || 0).toFixed(2)),
+                highest_percentage: Number(Number(summary.highest_percentage || 0).toFixed(2)),
+                lowest_percentage: Number(Number(summary.lowest_percentage || 0).toFixed(2)),
+                average_sgpa: Number(Number(summary.average_sgpa || 0).toFixed(2)),
+                backlog_count: Number(summary.backlog_count || 0)
+            };
+
+            const passPercentage = summaryTotals.students_appeared > 0
+                ? ((summaryTotals.students_passed / summaryTotals.students_appeared) * 100)
+                : 0;
+
+            return res.json({
+                status: "success",
+                filters: {
+                    department: req.query.department || "All",
+                    year: req.query.year || "All",
+                    semester: req.query.semester || "All",
+                    section: req.query.section || "All",
+                    academic_year: req.query.academic_year || "All"
+                },
+                summary: {
+                    total_students: summaryTotals.total_students,
+                    students_appeared: summaryTotals.students_appeared,
+                    students_passed: summaryTotals.students_passed,
+                    students_failed: summaryTotals.students_failed,
+                    pass_percentage: Number(passPercentage.toFixed(2)),
+                    fail_percentage: Number((100 - passPercentage).toFixed(2)),
+                    average_percentage: summaryTotals.average_percentage,
+                    highest_percentage: summaryTotals.highest_percentage,
+                    lowest_percentage: summaryTotals.lowest_percentage,
+                    average_sgpa: summaryTotals.average_sgpa,
+                    backlog_count: summaryTotals.backlog_count
+                },
+                sections,
+                subjectAnalytics,
+                gradeDistribution,
+                departmentComparison
+            });
+        } catch (error) {
+            console.error("Result analytics error:", error);
+            return res.status(500).json({ status: "error", message: error.message });
+        }
+    }
+);
+
+app.post(
+    "/api/admin/results/import",
+    authenticateToken,
+    requireAdmin,
+    (req, res) => {
+        try {
+            const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
+            if (!rows.length) {
+                return res.status(400).json({ status: "error", message: "No result rows provided for import" });
+            }
+
+            const imported = [];
+            const stmt = db.prepare(`
+                INSERT INTO result_records (
+                    student_id, department, year, semester, section, academic_year,
+                    subject, subject_code, internal_marks, external_marks, total_marks,
+                    grade, grade_point, pass_status, backlog_status, result_status,
+                    publication_status, reviewed_by, approved_by, published_by,
+                    created_by, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            `);
+
+            rows.forEach((row) => {
+                const studentId = Number(row.student_id || row.studentId || 0);
+                const department = String(row.department || "").trim();
+                const year = Number(row.year || 1);
+                const semester = Number(row.semester || 1);
+                const section = String(row.section || "").trim();
+                const academicYear = String(row.academic_year || row.academicYear || "2026-27").trim();
+                const subject = String(row.subject || "").trim();
+                const subjectCode = String(row.subject_code || row.subjectCode || "").trim();
+                const internalMarks = Number(row.internal_marks ?? row.internalMarks ?? 0);
+                const externalMarks = Number(row.external_marks ?? row.externalMarks ?? 0);
+                const totalMarks = Number(row.total_marks ?? row.totalMarks ?? internalMarks + externalMarks);
+                const grade = String(row.grade || getResultGrade(totalMarks)).trim();
+                const gradePoint = Number(row.grade_point ?? row.gradePoint ?? getGradePoint(grade));
+                const passStatus = String(row.pass_status || row.passStatus || (totalMarks >= 40 ? "Pass" : "Fail")).trim();
+                const backlogStatus = String(row.backlog_status || row.backlogStatus || (passStatus === "Pass" ? "None" : "Backlog")).trim();
+                const resultStatus = String(row.result_status || row.resultStatus || "Uploaded").trim();
+                const publicationStatus = String(row.publication_status || row.publicationStatus || "Draft").trim();
+
+                const result = stmt.run(
+                    studentId,
+                    department,
+                    year,
+                    semester,
+                    section,
+                    academicYear,
+                    subject,
+                    subjectCode,
+                    internalMarks,
+                    externalMarks,
+                    totalMarks,
+                    grade,
+                    gradePoint,
+                    passStatus,
+                    backlogStatus,
+                    resultStatus,
+                    publicationStatus,
+                    null,
+                    null,
+                    null,
+                    req.user.id
+                );
+                imported.push({ id: result.lastInsertRowid, student_id: studentId, subject });
+            });
+
+            return res.status(201).json({ status: "success", message: `${imported.length} result rows imported`, imported });
+        } catch (error) {
+            console.error("Result import error:", error);
+            return res.status(500).json({ status: "error", message: error.message });
+        }
+    }
+);
+
+app.patch(
+    "/api/admin/results/:id/publish",
+    authenticateToken,
+    requireAdmin,
+    (req, res) => {
+        try {
+            const resultId = Number(req.params.id);
+            const target = db.prepare(`SELECT * FROM result_records WHERE id = ?`).get(resultId);
+            if (!target) {
+                return res.status(404).json({ status: "error", message: "Result record not found" });
+            }
+
+            db.prepare(`
+                UPDATE result_records
+                SET publication_status = 'Published',
+                    published_by = ?,
+                    published_at = CURRENT_TIMESTAMP,
+                    result_status = 'Published',
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+            `).run(req.user.id, resultId);
+
+            return res.json({ status: "success", message: "Results published to students" });
+        } catch (error) {
+            console.error("Result publish error:", error);
+            return res.status(500).json({ status: "error", message: error.message });
+        }
+    }
+);
+
+app.get(
+    "/api/student/results",
+    authenticateToken,
+    requireStudent,
+    (req, res) => {
+        try {
+            const student = db.prepare(`SELECT id, student_id, full_name, department, year, section, academic_year FROM students WHERE user_id = ?`).get(req.user.id);
+            if (!student) {
+                return res.status(404).json({ status: "error", message: "Student record not found" });
+            }
+
+            const records = db.prepare(`
+                SELECT *
+                FROM result_records
+                WHERE student_id = ?
+                ORDER BY academic_year DESC, semester ASC, created_at DESC
+            `).all(student.id);
+
+            const published = records.filter((row) => row.publication_status === "Published");
+            return res.json({
+                status: "success",
+                student,
+                records,
+                published,
+                can_view_results: published.length > 0,
+                message: published.length ? "Semester results published" : "Results are currently under review."
+            });
+        } catch (error) {
+            console.error("Student results error:", error);
+            return res.status(500).json({ status: "error", message: error.message });
+        }
+    }
+);
+
 app.get(
     "/api/admin/notifications",
     authenticateToken,
@@ -5162,7 +6237,31 @@ app.delete(
     }
 );
 
-app.listen(PORT, () => {
+app.use((error, req, res, next) => {
+    if (res.headersSent) return next(error);
+
+    if (error.type === "entity.too.large" || error.code === "LIMIT_FILE_SIZE") {
+        return res.status(413).json({
+            status: "error",
+            message: "Request or file is too large"
+        });
+    }
+
+    if (error instanceof SyntaxError && error.status === 400 && "body" in error) {
+        return res.status(400).json({
+            status: "error",
+            message: "Invalid JSON request"
+        });
+    }
+
+    console.error("Unhandled request error:", error);
+    return res.status(500).json({
+        status: "error",
+        message: "Internal server error"
+    });
+});
+
+app.listen(PORT, "0.0.0.0", () => {
     console.log("\n==========================================");
     console.log(" KHIT FAMILY PORTAL SERVER");
     console.log("==========================================");

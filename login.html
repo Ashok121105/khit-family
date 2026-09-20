@@ -122,6 +122,41 @@
             outline: none;
         }
 
+        .password-wrap {
+            position: relative;
+        }
+
+        .password-wrap input {
+            padding-right: 48px;
+        }
+
+        .mouth-toggle {
+            position: absolute;
+            top: 50%;
+            right: 8px;
+            transform: translateY(-50%);
+            width: 34px;
+            height: 34px;
+            border: 0;
+            border-radius: 50%;
+            background: #f8e8ed;
+            color: var(--khit-deep);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0;
+            font-size: 18px;
+            line-height: 1;
+            font-family: "Segoe UI Emoji", sans-serif;
+        }
+
+        .mouth-toggle:hover,
+        .mouth-toggle:focus-visible {
+            background: #f4ccd7;
+            outline: 2px solid rgba(143, 23, 56, 0.25);
+        }
+
         input:focus {
             border-color: #2563eb;
             box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.08);
@@ -283,12 +318,15 @@
                 Password
             </label>
 
-            <input
-                type="password"
-                id="password"
-                placeholder="Enter password"
-                autocomplete="current-password"
-            >
+            <div class="password-wrap">
+                <input
+                    type="password"
+                    id="password"
+                    placeholder="Enter password"
+                    autocomplete="current-password"
+                >
+                <button class="mouth-toggle" type="button" onclick="togglePasswordVisibility('password', this)" aria-label="Show password" title="Show password">🙈</button>
+            </div>
 
         </div>
 
@@ -339,7 +377,10 @@
 
             <div class="field">
                 <label for="newPassword">New Password</label>
-                <input type="password" id="newPassword" minlength="8" placeholder="At least 8 characters">
+                <div class="password-wrap">
+                    <input type="password" id="newPassword" minlength="8" placeholder="At least 8 characters">
+                    <button class="mouth-toggle" type="button" onclick="togglePasswordVisibility('newPassword', this)" aria-label="Show password" title="Show password">🙈</button>
+                </div>
             </div>
 
             <button class="login-btn" type="button" onclick="confirmPasswordReset()">
@@ -374,6 +415,15 @@
 <script>
 
 const API_URL = window.location.origin;
+
+function togglePasswordVisibility(inputId, button) {
+    const input = document.getElementById(inputId);
+    const isVisible = input.type === "text";
+    input.type = isVisible ? "password" : "text";
+    button.textContent = isVisible ? "🙈" : "👀";
+    button.setAttribute("aria-label", isVisible ? "Show password" : "Hide password");
+    button.setAttribute("title", isVisible ? "Show password" : "Hide password");
+}
 
 
 // ==========================================

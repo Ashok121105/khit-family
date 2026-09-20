@@ -825,7 +825,7 @@
         try {
 
             const response = await fetch(
-                "/api/student/exams",
+                "/api/student/results",
                 {
                     headers: {
                         "Authorization":
@@ -837,18 +837,47 @@
             if (!response.ok) return;
 
             const data = await response.json();
-            const results = data.results || [];
-            const table = document.querySelector("table");
+            const published = data.published || [];
+            const statusBadge = document.querySelector(".result-status");
+            const resultText = document.querySelector(".result-header .muted b");
 
-            if (table && results.length) {
-                table.querySelector("tbody").innerHTML = results.map(result => `
+            if (statusBadge) {
+                statusBadge.textContent = data.can_view_results ? "Published" : "Under Review";
+            }
+
+            const tables = document.querySelectorAll("table");
+            const firstTable = tables[0];
+            const subjectTable = tables[1];
+
+            if (firstTable && published.length) {
+                firstTable.querySelector("tbody").innerHTML = published.map(item => `
                     <tr>
-                        <td>${result.exam_type || "-"}</td>
-                        <td>${result.subject_name || result.subject_code || "-"}</td>
-                        <td>${result.exam_date || "-"}</td>
-                        <td>${result.marks ?? "-"} / ${result.max_marks ?? "-"}</td>
+                        <td>${item.semester || "-"}</td>
+                        <td>${item.subject || "-"}</td>
+                        <td>${item.subject_code || "-"}</td>
+                        <td>${item.total_marks ?? "-"}</td>
+                        <td>${item.grade || "-"}</td>
+                        <td>${item.pass_status || "-"}</td>
                     </tr>
                 `).join("");
+            }
+
+            if (subjectTable && published.length) {
+                subjectTable.querySelector("tbody").innerHTML = published.map(item => `
+                    <tr>
+                        <td>${item.subject_code || "-"}</td>
+                        <td>${item.subject || "-"}</td>
+                        <td>${item.internal_marks ?? "-"}</td>
+                        <td>${item.external_marks ?? "-"}</td>
+                        <td class="marks-total">${item.total_marks ?? "-"}</td>
+                        <td class="grade">${item.grade || "-"}</td>
+                        <td>${item.pass_status || "-"}</td>
+                    </tr>
+                `).join("");
+            }
+
+            if (!published.length && statusBadge) {
+                statusBadge.textContent = "Under Review";
             }
 
         } catch (error) {

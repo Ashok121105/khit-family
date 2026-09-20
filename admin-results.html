@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Result Analytics | KHIT Family</title>
+    <link rel="stylesheet" href="premium-theme.css" />
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            font-family: "Segoe UI", Arial, sans-serif;
+            background: #f4f7fb;
+            color: #0f172a;
+        }
+        .topbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: #0f172a;
+            color: #fff;
+            padding: 18px 28px;
+        }
+        .brand h1 {
+            margin: 0;
+            font-size: 26px;
+        }
+        .brand p {
+            margin: 4px 0 0;
+            color: #cbd5e1;
+            font-size: 12px;
+        }
+        .top-actions {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .user-pill {
+            background: rgba(255,255,255,0.08);
+            border: 1px solid rgba(255,255,255,0.12);
+            border-radius: 20px;
+            padding: 8px 12px;
+            font-size: 12px;
+        }
+        .btn {
+            border: none;
+            padding: 10px 16px;
+            border-radius: 10px;
+            cursor: pointer;
+            font-weight: 700;
+            background: linear-gradient(135deg, #991b1b, #b91c1c);
+            color: #fff;
+        }
+        .btn.secondary {
+            background: #e2e8f0;
+            color: #0f172a;
+        }
+        .container {
+            max-width: 1280px;
+            margin: 28px auto;
+            padding: 0 20px 40px;
+        }
+        .hero {
+            background: linear-gradient(135deg, #7f1d1d, #1d4ed8);
+            color: #fff;
+            border-radius: 16px;
+            padding: 28px;
+            margin-bottom: 22px;
+        }
+        .hero h2 { margin: 0 0 8px; font-size: 30px; }
+        .hero p { margin: 0; color: #dbeafe; }
+        .filters {
+            display: grid;
+            grid-template-columns: repeat(6, minmax(120px, 1fr));
+            gap: 12px;
+            background: #fff;
+            border: 1px solid #e2e8f0;
+            border-radius: 14px;
+            padding: 16px;
+            box-shadow: 0 5px 20px rgba(15,23,42,0.04);
+            margin-bottom: 22px;
+        }
+        .field label {
+            display: block;
+            margin-bottom: 6px;
+            font-size: 12px;
+            color: #475569;
+            font-weight: 700;
+        }
+        .field select, .field input {
+            width: 100%;
+            height: 42px;
+            border: 1px solid #cbd5e1;
+            border-radius: 10px;
+            padding: 0 10px;
+            background: #fff;
+        }
+        .summary-grid {
+            display: grid;
+            grid-template-columns: repeat(6, minmax(150px, 1fr));
+            gap: 14px;
+            margin-bottom: 22px;
+        }
+        .card {
+            background: #fff;
+            border: 1px solid #e2e8f0;
+            border-radius: 14px;
+            padding: 18px;
+            box-shadow: 0 6px 16px rgba(15,23,42,0.04);
+        }
+        .card h3 {
+            color: #475569;
+            margin: 0 0 10px;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.7px;
+        }
+        .value {
+            font-size: 28px;
+            font-weight: 800;
+            color: #0f172a;
+        }
+        .panel {
+            display: grid;
+            grid-template-columns: 1.9fr 1fr;
+            gap: 20px;
+            margin-bottom: 22px;
+        }
+        .chart-wrap {
+            position: relative;
+            min-height: 520px;
+            background: #fff;
+            border: 1px solid #e2e8f0;
+            border-radius: 14px;
+            padding: 18px 18px 12px;
+        }
+        .chart-wrap canvas {
+            display: block;
+            width: 100% !important;
+            height: 440px !important;
+        }
+        .status-box {
+            margin-top: 10px;
+            color: #475569;
+            font-size: 13px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th, td {
+            border-bottom: 1px solid #e2e8f0;
+            padding: 10px 8px;
+            text-align: left;
+            font-size: 13px;
+        }
+        th {
+            color: #475569;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-size: 11px;
+        }
+        .muted {
+            color: #64748b;
+        }
+        .legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-top: 12px;
+            font-size: 12px;
+            color: #475569;
+        }
+        .legend span {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .dot {
+            width: 12px;
+            height: 12px;
+            display: inline-block;
+            border-radius: 50%;
+        }
+        @media (max-width: 980px) {
+            .filters, .summary-grid, .panel { grid-template-columns: 1fr 1fr; }
+        }
+        @media (max-width: 720px) {
+            .filters, .summary-grid, .panel { grid-template-columns: 1fr; }
+            .topbar { flex-wrap: wrap; gap: 12px; }
+        }
+    </style>
+</head>
+<body>
+    <header class="topbar">
+        <div class="brand">
+            <h1>KHIT Family</h1>
+            <p>Result Analytics & 3D Visualizations</p>
+        </div>
+        <div class="top-actions">
+            <span class="user-pill" id="headerUser">Admin</span>
+            <button class="btn secondary" onclick="window.location.href='admin-dashboard.html'">Back to Dashboard</button>
+            <button class="btn" onclick="logout()">Logout</button>
+        </div>
+    </header>
+
+    <main class="container">
+        <section class="hero">
+            <h2>Semester Result Analytics</h2>
+            <p>Department-wise trend analysis, section performance, subject analytics, and publish-ready result insights.</p>
+        </section>
+
+        <section class="filters" id="filtersForm">
+            <div class="field">
+                <label>Academic Year</label>
+                <select id="academicYearFilter"></select>
+            </div>
+            <div class="field">
+                <label>Department</label>
+                <select id="departmentFilter"></select>
+            </div>
+            <div class="field">
+                <label>Year</label>
+                <select id="yearFilter">
+                    <option value="">All</option>
+                    <option value="1">1st Year</option>
+                    <option value="2">2nd Year</option>
+                    <option value="3">3rd Year</option>
+                    <option value="4">4th Year</option>
+                </select>
+            </div>
+            <div class="field">
+                <label>Semester</label>
+                <select id="semesterFilter">
+                    <option value="">All</option>
+                    <option value="1">Semester 1</option>
+                    <option value="2">Semester 2</option>
+                    <option value="3">Semester 3</option>
+                    <option value="4">Semester 4</option>
+                    <option value="5">Semester 5</option>
+                    <option value="6">Semester 6</option>
+                    <option value="7">Semester 7</option>
+                    <option value="8">Semester 8</option>
+                </select>
+            </div>
+            <div class="field">
+                <label>Section</label>
+                <select id="sectionFilter"></select>
+            </div>
+            <div class="field">
+                <label>Metric</label>
+                <select id="metricFilter">
+                    <option value="pass_percentage">Pass Percentage</option>
+                    <option value="average_percentage">Average Percentage</option>
+                    <option value="average_sgpa">Average SGPA</option>
+                    <option value="passed_students">Passed Students</option>
+                    <option value="failed_students">Failed Students</option>
+                    <option value="backlog_count">Backlogs</option>
+                </select>
+            </div>
+            <div class="field" style="grid-column: span 2;">
+                <label>Subject</label>
+                <input id="subjectFilter" type="text" placeholder="e.g. Java Programming" />
+            </div>
+            <div class="field">
+                <label>Result Status</label>
+                <select id="resultStatusFilter">
+                    <option value="">All</option>
+                    <option value="Uploaded">Uploaded</option>
+                    <option value="Reviewed">Reviewed</option>
+                    <option value="Published">Published</option>
+                </select>
+            </div>
+            <div class="field" style="display:flex; align-items:flex-end;">
+                <button class="btn" id="generateBtn" type="button">Generate Analytics</button>
+            </div>
+        </section>
+
+        <section class="summary-grid" id="summaryCards">
+            <div class="card">
+                <h3>Total Students</h3>
+                <div class="value" id="totalStudents">0</div>
+            </div>
+            <div class="card">
+                <h3>Students Passed</h3>
+                <div class="value" id="studentsPassed">0</div>
+            </div>
+            <div class="card">
+                <h3>Students Failed</h3>
+                <div class="value" id="studentsFailed">0</div>
+            </div>
+            <div class="card">
+                <h3>Pass %</h3>
+                <div class="value" id="passPercentage">0%</div>
+            </div>
+            <div class="card">
+                <h3>Average %</h3>
+                <div class="value" id="averagePercentage">0%</div>
+            </div>
+            <div class="card">
+                <h3>Backlogs</h3>
+                <div class="value" id="backlogCount">0</div>
+            </div>
+        </section>
+
+        <section class="panel">
+            <div class="chart-wrap">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+                    <h3 style="margin:0;">3D Result Graph</h3>
+                    <button class="btn secondary" id="refreshGraphBtn" type="button">Refresh Graph</button>
+                </div>
+                <canvas id="resultChart" height="260"></canvas>
+                <div class="status-box" id="chartStatus">Generating result analytics...</div>
+            </div>
+            <div class="card">
+                <h3>Section Comparison</h3>
+                <table id="sectionTable">
+                    <thead>
+                        <tr>
+                            <th>Section</th>
+                            <th>Students</th>
+                            <th>Pass %</th>
+                            <th>Avg %</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr><td colspan="4" class="muted">Loading...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="panel">
+            <div class="card">
+                <h3>Subject-wise Analysis</h3>
+                <table id="subjectTable">
+                    <thead>
+                        <tr>
+                            <th>Subject</th>
+                            <th>Appeared</th>
+                            <th>Pass %</th>
+                            <th>Avg Marks</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr><td colspan="4" class="muted">Loading...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="card">
+                <h3>Grade Distribution</h3>
+                <table id="gradeTable">
+                    <thead>
+                        <tr>
+                            <th>Grade</th>
+                            <th>Count</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr><td colspan="2" class="muted">Loading...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+
+    <script>
+        const token = localStorage.getItem('khit_token');
+        const API = window.location.origin;
+        if (!token) window.location.replace('/database/admin-login.html');
+
+        const state = {
+            chart: null,
+            departments: [],
+            sections: []
+        };
+
+        function logout() {
+            localStorage.removeItem('khit_token');
+            localStorage.removeItem('khit_user');
+            window.location.replace('/database/admin-login.html');
+        }
+
+        function setUserHeader() {
+            const userStr = localStorage.getItem('khit_user');
+            if (!userStr) return;
+            try {
+                const user = JSON.parse(userStr);
+                document.getElementById('headerUser').textContent = user.username || 'Admin';
+            } catch (error) {
+                console.error('Unable to read admin user', error);
+            }
+        }
+
+        function createQueryString() {
+            const params = new URLSearchParams();
+            const filters = {
+                academic_year: document.getElementById('academicYearFilter').value,
+                department: document.getElementById('departmentFilter').value,
+                year: document.getElementById('yearFilter').value,
+                semester: document.getElementById('semesterFilter').value,
+                section: document.getElementById('sectionFilter').value,
+                subject: document.getElementById('subjectFilter').value,
+                result_status: document.getElementById('resultStatusFilter').value,
+                metric: document.getElementById('metricFilter').value
+            };
+            Object.entries(filters).forEach(([key, value]) => {
+                if (value) params.set(key, value);
+            });
+            return params.toString();
+        }
+
+        function renderSummary(data) {
+            const summary = data.summary || {};
+            document.getElementById('totalStudents').textContent = summary.total_students || 0;
+            document.getElementById('studentsPassed').textContent = summary.students_passed || 0;
+            document.getElementById('studentsFailed').textContent = summary.students_failed || 0;
+            document.getElementById('passPercentage').textContent = `${summary.pass_percentage || 0}%`;
+            document.getElementById('averagePercentage').textContent = `${summary.average_percentage || 0}%`;
+            document.getElementById('backlogCount').textContent = summary.backlog_count || 0;
+        }
+
+        function renderSectionTable(data) {
+            const rows = Array.isArray(data.sections) ? data.sections : [];
+            const tbody = document.querySelector('#sectionTable tbody');
+            if (!rows.length) {
+                tbody.innerHTML = '<tr><td colspan="4" class="muted">No section data available.</td></tr>';
+                return;
+            }
+            tbody.innerHTML = rows.map(row => `
+                <tr>
+                    <td>${row.section || 'All'}</td>
+                    <td>${row.students || 0}</td>
+                    <td>${Number(row.passed || 0) > 0 && Number(row.students || 0) > 0 ? (((Number(row.passed || 0) / Number(row.students || 0)) * 100).toFixed(2)) : 0}%</td>
+                    <td>${Number(row.avg_percentage || 0).toFixed(2)}%</td>
+                </tr>
+            `).join('');
+        }
+
+        function renderSubjectTable(data) {
+            const rows = Array.isArray(data.subjectAnalytics) ? data.subjectAnalytics : [];
+            const tbody = document.querySelector('#subjectTable tbody');
+            if (!rows.length) {
+                tbody.innerHTML = '<tr><td colspan="4" class="muted">No subject analytics available.</td></tr>';
+                return;
+            }
+            tbody.innerHTML = rows.slice(0, 8).map(row => {
+                const appeared = Number(row.students_appeared || 0);
+                const passed = Number(row.students_passed || 0);
+                const pass = appeared > 0 ? ((passed / appeared) * 100).toFixed(2) : 0;
+                return `
+                    <tr>
+                        <td>${row.subject || '-'}</td>
+                        <td>${appeared}</td>
+                        <td>${pass}%</td>
+                        <td>${Number(row.average_marks || 0).toFixed(2)}</td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        function renderGradeTable(data) {
+            const rows = Array.isArray(data.gradeDistribution) ? data.gradeDistribution : [];
+            const tbody = document.querySelector('#gradeTable tbody');
+            if (!rows.length) {
+                tbody.innerHTML = '<tr><td colspan="2" class="muted">No grade distribution available.</td></tr>';
+                return;
+            }
+            tbody.innerHTML = rows.map(row => `
+                <tr>
+                    <td>${row.grade || '-'}</td>
+                    <td>${row.count || 0}</td>
+                </tr>
+            `).join('');
+        }
+
+        function buildChartData(data) {
+            const rows = Array.isArray(data.sections) ? data.sections : [];
+            const demoLabels = ['A Section', 'B Section', 'C Section'];
+            const demoValues = [92, 76, 98];
+
+            if (!rows.length) {
+                return {
+                    labels: demoLabels,
+                    values: demoValues
+                };
+            }
+
+            const labels = rows.map(item => String(item.section || 'All'));
+            const metric = document.getElementById('metricFilter').value || 'pass_percentage';
+            const values = rows.map((item) => {
+                if (metric === 'pass_percentage') return Number(((Number(item.passed || 0) / (Number(item.students || 0) || 1)) * 100).toFixed(2));
+                if (metric === 'average_percentage') return Number(item.avg_percentage || 0);
+                if (metric === 'average_sgpa') return Number(item.avg_sgpa || 0);
+                if (metric === 'passed_students') return Number(item.passed || 0);
+                if (metric === 'failed_students') return Number(item.failed || 0);
+                if (metric === 'backlog_count') return Number(item.backlog_count || 0);
+                return 0;
+            });
+            return { labels, values };
+        }
+
+        function createChart(data) {
+            const canvas = document.getElementById('resultChart');
+            const metric = document.getElementById('metricFilter').value || 'pass_percentage';
+            const { labels, values } = buildChartData(data);
+            const ctx = canvas.getContext('2d');
+            const isDemoChart = !Array.isArray(data.sections) || data.sections.length === 0;
+
+            if (!labels.length || !values.length) {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                canvas.width = 640;
+                canvas.height = 300;
+                ctx.fillStyle = '#64748b';
+                ctx.font = '16px Segoe UI';
+                ctx.textAlign = 'center';
+                ctx.fillText('No chart data available', canvas.width / 2, canvas.height / 2);
+                document.getElementById('chartStatus').textContent = 'No section result data is available for the selected filters.';
+                return;
+            }
+
+            const width = canvas.width = 640;
+            const height = canvas.height = 300;
+            const leftPad = 48;
+            const rightPad = 18;
+            const bottomPad = 48;
+            const topPad = 22;
+            const chartWidth = width - leftPad - rightPad;
+            const chartHeight = height - topPad - bottomPad;
+            const maxValue = Math.max(...values, 100);
+            const barStep = chartWidth / labels.length;
+            const barWidth = Math.min(74, barStep * 0.6);
+            const colors = ['#2563eb', '#f59e0b', '#10b981', '#ef4444', '#8b5cf6', '#14b8a6', '#f97316', '#06b6d4'];
+            const demoAccentColors = ['#2563eb', '#f97316', '#10b981'];
+
+            ctx.clearRect(0, 0, width, height);
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, width, height);
+
+            ctx.strokeStyle = 'rgba(148,163,184,0.35)';
+            ctx.lineWidth = 1;
+            for (let i = 0; i <= 5; i += 1) {
+                const y = topPad + (chartHeight * i / 5);
+                ctx.beginPath();
+                ctx.moveTo(leftPad, y);
+                ctx.lineTo(width - rightPad, y);
+                ctx.stroke();
+
+                const labelValue = (maxValue * (1 - i / 5));
+                const valueText = (metric === 'pass_percentage' || metric === 'average_percentage')
+                    ? `${labelValue.toFixed(0)}%`
+                    : `${labelValue.toFixed(0)}`;
+                ctx.fillStyle = '#475569';
+                ctx.font = '11px Segoe UI';
+                ctx.textAlign = 'right';
+                ctx.fillText(valueText, leftPad - 8, y + 4);
+            }
+
+            labels.forEach((label, index) => {
+                const value = Number(values[index] || 0);
+                const x = leftPad + (index * barStep) + (barStep - barWidth) / 2;
+                const barHeight = (value / maxValue) * chartHeight;
+                const y = height - bottomPad - barHeight;
+                const fill = isDemoChart ? demoAccentColors[index % demoAccentColors.length] : colors[index % colors.length];
+
+                const grad = ctx.createLinearGradient(0, y, 0, height - bottomPad);
+                grad.addColorStop(0, '#ffffff');
+                grad.addColorStop(0.2, fill);
+                grad.addColorStop(1, fill);
+
+                ctx.fillStyle = grad;
+                ctx.fillRect(x, y, barWidth, barHeight);
+                ctx.strokeStyle = fill;
+                ctx.strokeRect(x, y, barWidth, barHeight);
+
+                const labelText = (metric === 'pass_percentage' || metric === 'average_percentage')
+                    ? `${value.toFixed(1)}%`
+                    : `${value.toFixed(1)}`;
+                ctx.fillStyle = '#0f172a';
+                ctx.font = 'bold 11px Segoe UI';
+                ctx.textAlign = 'center';
+                ctx.fillText(labelText, x + barWidth / 2, y - 8);
+
+                ctx.fillStyle = '#475569';
+                ctx.font = '11px Segoe UI';
+                ctx.fillText(label, x + barWidth / 2, height - 18);
+            });
+
+            ctx.fillStyle = '#0f172a';
+            ctx.font = 'bold 12px Segoe UI';
+            ctx.textAlign = 'left';
+            ctx.fillText(isDemoChart ? 'Faculty Demo: Section Performance' : 'Section Performance', 20, 18);
+
+            document.getElementById('chartStatus').textContent = isDemoChart
+                ? 'Faculty example snapshot: A Section 92%, B Section 76%, C Section 98%.'
+                : `${labels.length} section series rendered for ${metric.replace('_', ' ')}.`;
+        }
+
+        async function loadAllDepartments() {
+            const response = await fetch(`${API}/api/admin/students?limit=1`, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            if (!response.ok) return;
+            const data = await response.json();
+            const departments = [''];
+            if (Array.isArray(data.students)) {
+                data.students.forEach((student) => {
+                    if (student.department && !departments.includes(student.department)) departments.push(student.department);
+                });
+            }
+            const deptSel = document.getElementById('departmentFilter');
+            deptSel.innerHTML = '<option value="">All Departments</option>' + departments.filter(Boolean).map(dep => `<option value="${dep}">${dep}</option>`).join('');
+            state.departments = departments.filter(Boolean);
+            document.getElementById('sectionFilter').innerHTML = '<option value="">All Sections</option>';
+        }
+
+        async function loadAnalytics() {
+            document.getElementById('chartStatus').textContent = 'Generating result analytics...';
+            const qs = createQueryString();
+            const response = await fetch(`${API}/api/admin/results/analytics${qs ? `?${qs}` : ''}`, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+            const result = await response.json();
+            if (!response.ok || result.status !== 'success') {
+                document.getElementById('chartStatus').textContent = result.message || 'Unable to generate analytics.';
+                return;
+            }
+            renderSummary(result);
+            renderSectionTable(result);
+            renderSubjectTable(result);
+            renderGradeTable(result);
+            createChart(result);
+        }
+
+        function populateSectionsFromData(data) {
+            const rows = Array.isArray(data.sections) ? data.sections : [];
+            const sectionSet = new Set(['']);
+            rows.forEach((row) => {
+                if (row.section) sectionSet.add(String(row.section));
+            });
+            const sectionFilter = document.getElementById('sectionFilter');
+            sectionFilter.innerHTML = '<option value="">All Sections</option>' + [...sectionSet].filter(Boolean).map(section => `<option value="${section}">${section}</option>`).join('');
+        }
+
+        document.getElementById('generateBtn').addEventListener('click', async () => {
+            await loadAnalytics();
+        });
+        document.getElementById('refreshGraphBtn').addEventListener('click', async () => {
+            await loadAnalytics();
+        });
+
+        async function bootstrap() {
+            setUserHeader();
+            const academicYear = document.getElementById('academicYearFilter');
+            academicYear.innerHTML = '<option value="">All Academic Years</option><option value="2026-27">2026-27</option><option value="2025-26">2025-26</option>';
+            await loadAllDepartments();
+            await loadAnalytics();
+        }
+
+        bootstrap();
+    </script>
+</body>
+</html>

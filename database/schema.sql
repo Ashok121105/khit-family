@@ -43,6 +43,8 @@ CREATE TABLE IF NOT EXISTS students (
     profile_photo TEXT,
     linkedin_url TEXT,
     github_url TEXT,
+    instagram_url TEXT,
+    other_link_url TEXT,
     portfolio_url TEXT,
     FOREIGN KEY (user_id) REFERENCES users(id)
 );
@@ -52,6 +54,9 @@ CREATE TABLE IF NOT EXISTS notifications (
     title TEXT NOT NULL,
     message TEXT,
     audience TEXT DEFAULT 'All',
+    branch TEXT,
+    year INTEGER,
+    section TEXT,
     is_read INTEGER DEFAULT 0,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
@@ -136,6 +141,48 @@ CREATE TABLE IF NOT EXISTS subjects (
     semester INTEGER,
     section TEXT
 );
+
+CREATE TABLE IF NOT EXISTS result_records (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    student_id INTEGER NOT NULL,
+    department TEXT,
+    year INTEGER,
+    semester INTEGER,
+    section TEXT,
+    academic_year TEXT,
+    subject TEXT,
+    subject_code TEXT,
+    internal_marks REAL DEFAULT 0,
+    external_marks REAL DEFAULT 0,
+    total_marks REAL DEFAULT 0,
+    grade TEXT,
+    grade_point REAL DEFAULT 0,
+    pass_status TEXT DEFAULT 'Pending',
+    backlog_status TEXT DEFAULT 'None',
+    sgpa REAL DEFAULT 0,
+    cgpa REAL DEFAULT 0,
+    result_status TEXT DEFAULT 'Uploaded',
+    publication_status TEXT DEFAULT 'Draft',
+    reviewed_by INTEGER,
+    approved_by INTEGER,
+    published_by INTEGER,
+    published_at DATETIME,
+    created_by INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE,
+    FOREIGN KEY (reviewed_by) REFERENCES users(id) ON DELETE SET NULL,
+    FOREIGN KEY (approved_by) REFERENCES users(id) ON DELETE SET NULL,
+    FOREIGN KEY (published_by) REFERENCES users(id) ON DELETE SET NULL,
+    FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_result_records_student ON result_records(student_id);
+CREATE INDEX IF NOT EXISTS idx_result_records_department ON result_records(department);
+CREATE INDEX IF NOT EXISTS idx_result_records_academic_year ON result_records(academic_year);
+CREATE INDEX IF NOT EXISTS idx_result_records_semester ON result_records(semester);
+CREATE INDEX IF NOT EXISTS idx_result_records_section ON result_records(section);
+CREATE INDEX IF NOT EXISTS idx_result_records_publication ON result_records(publication_status);
 
 CREATE TABLE IF NOT EXISTS attendance (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -422,9 +469,23 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_students_department_year ON students(department, year);
+CREATE INDEX IF NOT EXISTS idx_users_username_role ON users(username, role);
+CREATE INDEX IF NOT EXISTS idx_students_user_id ON students(user_id);
+CREATE INDEX IF NOT EXISTS idx_students_student_id_roll ON students(student_id, roll_number);
 CREATE INDEX IF NOT EXISTS idx_attendance_student_date ON attendance(student_id, attendance_date);
+CREATE INDEX IF NOT EXISTS idx_attendance_student_subject ON attendance(student_id, subject);
 CREATE INDEX IF NOT EXISTS idx_marks_student ON marks(student_id);
+CREATE INDEX IF NOT EXISTS idx_marks_student_subject_date ON marks(student_id, subject_id, exam_date);
 CREATE INDEX IF NOT EXISTS idx_notifications_created_at ON notifications(created_at);
+CREATE INDEX IF NOT EXISTS idx_notifications_audience_created_at ON notifications(audience, created_at);
+CREATE INDEX IF NOT EXISTS idx_notification_reads_student ON notification_reads(student_id, notification_id);
+CREATE INDEX IF NOT EXISTS idx_fees_student_year_status ON fees(student_id, academic_year, status);
+CREATE INDEX IF NOT EXISTS idx_faculty_department ON faculty(department);
+CREATE INDEX IF NOT EXISTS idx_assignments_subject_deadline ON assignments(subject_id, deadline);
+CREATE INDEX IF NOT EXISTS idx_assignment_submissions_student ON assignment_submissions(student_id, assignment_id);
+CREATE INDEX IF NOT EXISTS idx_documents_student_visibility_created ON documents(student_id, visibility, created_at);
+CREATE INDEX IF NOT EXISTS idx_leave_student_status_created ON leave_requests(student_id, status, created_at);
+CREATE INDEX IF NOT EXISTS idx_bus_assignments_student_year ON student_bus_assignments(student_id, academic_year);
 CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs(created_at);
 CREATE INDEX IF NOT EXISTS idx_study_materials_target ON study_materials(department, year, section);
 

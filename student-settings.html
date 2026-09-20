@@ -33,6 +33,13 @@
         .theme-preview { width: 100%; height: 42px; border-radius: 7px; margin-bottom: 12px; background: #fff; border: 1px solid #eadde0; }
         .theme-preview.dark { background: #241a1f; border-color: #5e1029; }
         .status { min-height: 20px; margin: 16px 0 0; color: #8f1738; font-size: 13px; font-weight: 700; }
+        .links-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+        .links-form label { display: block; margin-bottom: 6px; color: #30252a; font-size: 13px; font-weight: 700; }
+        .links-form input { width: 100%; border: 1px solid #d9cbd0; border-radius: 8px; padding: 12px; font-size: 14px; }
+        .links-form input:focus { outline: 2px solid rgba(143,23,56,0.18); border-color: #8f1738; }
+        .save-links { margin-top: 18px; border: 0; border-radius: 8px; padding: 11px 16px; background: #8f1738; color: #fff; font-weight: 700; cursor: pointer; }
+        .save-links:disabled { opacity: 0.65; cursor: wait; }
+        @media (max-width: 600px) { .links-form { grid-template-columns: 1fr; } }
         @media (max-width: 600px) { .settings-topbar { padding: 16px 5%; } .settings-main { width: 90%; } .theme-options { grid-template-columns: 1fr; } .top-actions .back-link { display: none; } }
     </style>
 </head>
@@ -78,10 +85,36 @@
                 </div>
                 <p id="themeStatus" class="status" aria-live="polite"></p>
             </section>
+
+            <section class="panel" aria-labelledby="linksHeading">
+                <h3 id="linksHeading">Social & Professional Links</h3>
+                <p class="panel-copy">Add optional links to show as icons on your student dashboard. Leave a field empty to remove it.</p>
+                <div class="links-form">
+                    <div>
+                        <label for="linkedinUrl">LinkedIn</label>
+                        <input id="linkedinUrl" type="url" placeholder="https://linkedin.com/in/your-name">
+                    </div>
+                    <div>
+                        <label for="githubUrl">GitHub</label>
+                        <input id="githubUrl" type="url" placeholder="https://github.com/your-name">
+                    </div>
+                    <div>
+                        <label for="instagramUrl">Instagram</label>
+                        <input id="instagramUrl" type="url" placeholder="https://instagram.com/your-name">
+                    </div>
+                    <div>
+                        <label for="otherLinkUrl">Other professional link</label>
+                        <input id="otherLinkUrl" type="url" placeholder="https://your-portfolio.example">
+                    </div>
+                </div>
+                <button id="saveLinksButton" class="save-links" type="button" onclick="saveProfileLinks()">Save Links</button>
+                <p id="linksStatus" class="status" aria-live="polite"></p>
+            </section>
         </main>
     </div>
 
     <script>
+        const API_URL = window.location.origin;
         const token = localStorage.getItem("khit_token");
         if (!token) {
             window.location.href = "login.html";
@@ -100,6 +133,56 @@
                 themeStatus.textContent = `${input.value === "dark" ? "Dark" : "Light"} mode saved.`;
             });
         });
+
+        async function loadProfileLinks() {
+            try {
+                const response = await fetch(`${API_URL}/api/student/profile`, {
+                    headers: { Authorization: `Bearer ${token}` }
+                });
+                const result = await response.json();
+                if (!response.ok) return;
+                const student = result.student || {};
+                document.getElementById("linkedinUrl").value = student.linkedin_url || "";
+                document.getElementById("githubUrl").value = student.github_url || "";
+                document.getElementById("instagramUrl").value = student.instagram_url || "";
+                document.getElementById("otherLinkUrl").value = student.other_link_url || "";
+            } catch (error) {
+                document.getElementById("linksStatus").textContent = "Unable to load saved links.";
+            }
+        }
+
+        async function saveProfileLinks() {
+            const button = document.getElementById("saveLinksButton");
+            const status = document.getElementById("linksStatus");
+            button.disabled = true;
+            status.textContent = "Saving...";
+            try {
+                const response = await fetch(`${API_URL}/api/student/profile`, {
+                    method: "PATCH",
+                    headers: {
+                        "Content-Type": "application/json",
+                        Authorization: `Bearer ${token}`
+                    },
+                    body: JSON.stringify({
+                        linkedin_url: document.getElementById("linkedinUrl").value.trim(),
+                        github_url: document.getElementById("githubUrl").value.trim(),
+                        instagram_url: document.getElementById("instagramUrl").value.trim(),
+                        other_link_url: document.getElementById("otherLinkUrl").value.trim()
+                    })
+                });
+                const result = await response.json();
+                status.textContent = result.message || (response.ok ? "Links saved." : "Unable to save links.");
+                if (response.ok && result.student) {
+                    localStorage.setItem("khit_student", JSON.stringify(result.student));
+                }
+            } catch (error) {
+                status.textContent = "Unable to save links.";
+            } finally {
+                button.disabled = false;
+            }
+        }
+
+        loadProfileLinks();
 
         function logout() {
             localStorage.removeItem("khit_token");

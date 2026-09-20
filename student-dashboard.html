@@ -157,6 +157,41 @@
 
                 }
 
+        .social-links {
+            display: none;
+            align-items: center;
+            gap: 8px;
+            margin-left: auto;
+            margin-right: 12px;
+        }
+
+        .social-links.has-links {
+            display: flex;
+        }
+
+        .social-link {
+            width: 34px;
+            height: 34px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+            background: #f8e8ed;
+            color: var(--theme-deep);
+            text-decoration: none;
+            font-size: 12px;
+            font-weight: 800;
+            letter-spacing: 0;
+            transition: transform 0.18s ease, background 0.18s ease;
+        }
+
+        .social-link:hover,
+        .social-link:focus-visible {
+            background: #f4ccd7;
+            transform: translateY(-1px);
+            outline: 2px solid rgba(143, 23, 56, 0.22);
+        }
+
         .container {
 
             padding: 30px;
@@ -931,6 +966,12 @@
             </div>
 
 
+            <div
+                class="social-links"
+                id="socialLinks"
+                aria-label="Student social and professional links"
+            ></div>
+
             <button
                 class="logout"
                 onclick="logout()"
@@ -1440,11 +1481,50 @@ async function loadStudentProfile() {
         const headerName = document.getElementById("headerName");
         if (headerName) headerName.textContent = name;
 
+        renderSocialLinks(student);
+
 
     } catch (error) {
         console.error("Student dashboard profile error:", error);
     }
 
+}
+
+function renderSocialLinks(student) {
+    const container = document.getElementById("socialLinks");
+    if (!container) return;
+    container.innerHTML = "";
+
+    const links = [
+        { field: "linkedin_url", label: "LinkedIn", mark: "in" },
+        { field: "github_url", label: "GitHub", mark: "GH" },
+        { field: "instagram_url", label: "Instagram", mark: "ig" },
+        { field: "other_link_url", label: "Other professional link", mark: "↗" }
+    ];
+
+    links.forEach(({ field, label, mark }) => {
+        const value = String(student[field] || "").trim();
+        if (!value) return;
+        let safeUrl;
+        try {
+            const parsedUrl = new URL(value, window.location.origin);
+            if (!['http:', 'https:'].includes(parsedUrl.protocol) || !parsedUrl.hostname) return;
+            safeUrl = parsedUrl.toString();
+        } catch (error) {
+            return;
+        }
+        const anchor = document.createElement("a");
+        anchor.className = "social-link";
+        anchor.href = safeUrl;
+        anchor.target = "_blank";
+        anchor.rel = "noopener noreferrer";
+        anchor.title = label;
+        anchor.setAttribute("aria-label", `Open ${label}`);
+        anchor.textContent = mark;
+        container.appendChild(anchor);
+    });
+
+    container.classList.toggle("has-links", container.children.length > 0);
 }
 
 loadStudentProfile();
