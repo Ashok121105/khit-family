@@ -883,5 +883,6 @@ function viewDrive(name) { alert(`${name}\n\nOfficial placement details will app
 async function loadPlacementDrives(){try{const response=await fetch("/api/student/placements",{headers:{Authorization:`Bearer ${token}`}});if(!response.ok)return;const data=await response.json();const drives=data.drives||[];if(!drives.length)return;const cards=document.querySelectorAll(".job-card");cards.forEach(card=>card.remove());const container=document.querySelector(".jobs-grid, .placements-grid");if(!container)return;drives.forEach(drive=>{const card=document.createElement("article");card.className="job-card";card.innerHTML=`<h3>${drive.company_name||"Company"}</h3><div class="role">${drive.job_role||"-"}</div><p>${drive.description||""}</p><div class="job-details">Drive date: ${drive.drive_date||"-"}<br>Location: ${drive.location||"-"}<br>Package: ${drive.package||"-"}</div><button class="apply-btn" onclick="viewDrive('${String(drive.company_name||"Placement").replace(/'/g,"\\'")}')">View Details</button>`;container.appendChild(card)})}catch(error){console.error("Placements error:",error)}}
 loadPlacementDrives();
 </script>
+<script src="khit-ai.js"></script>
 </body>
 </html>

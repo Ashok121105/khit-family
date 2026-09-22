@@ -22,6 +22,7 @@ function viewInternship(name){alert(`${name}\n\nOfficial internship details will
 async function loadInternships(){try{const response=await fetch("/api/student/internships",{headers:{Authorization:`Bearer ${token}`}});if(!response.ok)return;const data=await response.json();const internships=data.internships||[];if(!internships.length)return;const cards=document.querySelectorAll(".card");cards.forEach(card=>card.remove());const container=document.querySelector(".grid");if(!container)return;internships.forEach(item=>{const card=document.createElement("article");card.className="card";card.innerHTML=`<h3>${item.company_name||"Company"}</h3><p>${item.role||"-"}</p><p>${item.description||""}</p><div class="meta">Deadline: ${item.application_deadline||"-"}</div><button class="btn view" onclick="viewInternship('${String(item.company_name||"Internship").replace(/'/g,"\\'")}')">View Details</button>`;container.appendChild(card)})}catch(error){console.error("Internships error:",error)}}
 loadInternships();
 </script>
+<script src="khit-ai.js"></script>
 </body>
 </html>
 

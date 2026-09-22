@@ -22,6 +22,7 @@ function openDocument(name){alert(`${name}\n\nOfficial document download will be
 async function loadDocuments(){try{const response=await fetch("/api/student/documents",{headers:{Authorization:`Bearer ${token}`}});if(!response.ok)return;const data=await response.json();const documents=data.documents||[];if(!documents.length)return;const body=document.querySelector("table tbody");if(body)body.innerHTML=documents.map(item=>`<tr><td>${item.document_name||"-"}</td><td>${item.document_type||"-"}</td><td>${item.uploaded_at||"-"}</td><td><a href="${item.file_url}" target="_blank" rel="noopener">Open</a></td></tr>`).join("")}catch(error){console.error("Documents error:",error)}}
 loadDocuments();
 </script>
+<script src="khit-ai.js"></script>
 </body>
 </html>
 
