@@ -118,14 +118,53 @@
             .khit-ai-form input:focus { outline:2px solid var(--ai-gold); outline-offset:1px; }
             .khit-ai-form button { border:0; border-radius:9px; padding:0 13px; background:var(--ai-gold); color:#301522; cursor:pointer; font-weight:800; }
             .khit-ai-form button:focus-visible { outline:2px solid #fff; outline-offset:2px; }
+            .khit-password-wrap { position:relative; display:flex; align-items:center; width:100%; }
+            .khit-password-wrap input { flex:1; min-width:0; }
+            .khit-password-toggle { position:absolute; right:8px; width:32px; height:32px; padding:0; border:0; background:transparent; color:#74122f; cursor:pointer; font-size:17px; line-height:1; }
+            .khit-password-toggle:hover, .khit-password-toggle:focus-visible { background:transparent; color:#5e1029; transform:none; box-shadow:none; outline:2px solid rgba(143,23,56,.25); outline-offset:1px; }
             @media (max-width:600px) { .khit-ai-launcher { right:16px; bottom:16px; width:58px; height:58px; } .khit-ai-panel { inset:12px; width:auto; height:auto; min-width:0; min-height:0; max-width:none; max-height:none; border-radius:16px; } .khit-ai-panel.is-minimized { inset:auto 12px 86px 12px; height:70px; } }
         `;
         document.head.appendChild(style);
     }
 
+    function setupPasswordToggles() {
+        document.querySelectorAll('input[type="password"]').forEach(input => {
+            const wrapper = input.closest(".password-wrap, .khit-password-wrap");
+            if (wrapper) {
+                const existingButton = wrapper.querySelector("button");
+                if (existingButton) {
+                    existingButton.classList.add("khit-password-toggle");
+                    if (!existingButton.textContent.trim()) existingButton.textContent = "👁";
+                }
+                return;
+            }
+
+            const newWrapper = document.createElement("div");
+            newWrapper.className = "khit-password-wrap";
+            input.parentNode.insertBefore(newWrapper, input);
+            newWrapper.appendChild(input);
+
+            const toggle = document.createElement("button");
+            toggle.type = "button";
+            toggle.className = "khit-password-toggle";
+            toggle.textContent = "👁";
+            toggle.setAttribute("aria-label", "Show password");
+            toggle.title = "Show password";
+            toggle.addEventListener("click", () => {
+                const visible = input.type === "text";
+                input.type = visible ? "password" : "text";
+                toggle.textContent = visible ? "👁" : "🙈";
+                toggle.setAttribute("aria-label", visible ? "Show password" : "Hide password");
+                toggle.title = visible ? "Show password" : "Hide password";
+            });
+            newWrapper.appendChild(toggle);
+        });
+    }
+
     function init() {
         if (document.querySelector("[data-khit-ai-root]")) return;
         injectStyles();
+        setupPasswordToggles();
         const state = readState();
         const root = document.createElement("div");
         root.className = "khit-ai-root";
