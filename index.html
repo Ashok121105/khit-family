@@ -457,6 +457,54 @@
             box-shadow: 0 10px 18px rgba(18, 59, 109, 0.12);
         }
 
+        .demo-dialog[hidden] {
+            display: none;
+        }
+
+        .demo-dialog {
+            position: fixed;
+            inset: 0;
+            z-index: 20;
+            display: grid;
+            place-items: center;
+            padding: 20px;
+            background: rgba(48, 37, 42, 0.42);
+        }
+
+        .demo-dialog-card {
+            width: min(420px, 100%);
+            padding: 24px;
+            border-radius: 14px;
+            background: #ffffff;
+            color: #30252a;
+            box-shadow: 0 24px 60px rgba(48, 37, 42, 0.25);
+        }
+
+        .demo-dialog-card h2 {
+            margin: 0 0 8px;
+            color: #8f1738;
+        }
+
+        .demo-dialog-card pre {
+            margin: 16px 0;
+            padding: 14px;
+            border-radius: 8px;
+            background: #fffaf9;
+            color: #30252a;
+            white-space: pre-wrap;
+            font: 13px/1.6 monospace;
+        }
+
+        .demo-dialog-close {
+            border: 0;
+            border-radius: 8px;
+            padding: 10px 16px;
+            background: #8f1738;
+            color: #ffffff;
+            cursor: pointer;
+            font-weight: 700;
+        }
+
         footer {
             text-align: center;
             padding: 30px 15px;
@@ -598,6 +646,15 @@
         </div>
 
         <button class="demo-btn" type="button" onclick="showDemoCredentials()">View demo creds</button>
+    </div>
+
+    <div class="demo-dialog" id="demoDialog" role="dialog" aria-modal="true" aria-labelledby="demoDialogTitle" hidden>
+        <div class="demo-dialog-card">
+            <h2 id="demoDialogTitle">Demo credentials</h2>
+            <p>Use these accounts for local testing.</p>
+            <pre id="demoCredentialsText"></pre>
+            <button class="demo-dialog-close" type="button" onclick="closeDemoCredentials()">Close</button>
+        </div>
     </div>
 
     <div class="title-section">
@@ -1408,13 +1465,20 @@
             const details = [
                 `Admin: ${demo.admin?.username || "admin"} / ${demo.admin?.password || "admin123"}`,
                 `Student: ${demo.student?.username || "student"} / ${demo.student?.password || "student123"}`,
-                `Parent: student_id ${demo.parent?.student_id || "STU-1001"}, parent_mobile ${demo.parent?.parent_mobile || "9876500001"}`
+                `Parent: student_id ${demo.parent?.student_id || "STU-1001"}, parent_mobile ${demo.parent?.parent_mobile || "9876500001"}`,
+                `HOD: ${demo.management?.department_roles?.hod || "dev-hod-ece"} / demo123`
             ].join("\n");
 
-            alert("Demo credentials:\n\n" + details);
+            document.getElementById("demoCredentialsText").textContent = details;
+            document.getElementById("demoDialog").hidden = false;
         } catch (error) {
-            alert(error.message || "Unable to load demo credentials.");
+            document.getElementById("demoCredentialsText").textContent = error.message || "Unable to load demo credentials.";
+            document.getElementById("demoDialog").hidden = false;
         }
+    }
+
+    function closeDemoCredentials() {
+        document.getElementById("demoDialog").hidden = true;
     }
 
 </script>
