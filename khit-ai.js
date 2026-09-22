@@ -98,11 +98,11 @@
             .khit-ai-panel { position:fixed; right:24px; bottom:98px; width:370px; min-width:300px; height:520px; min-height:360px; max-width:calc(100vw - 32px); max-height:calc(100vh - 32px); display:flex; flex-direction:column; overflow:hidden; resize:both; border:1px solid rgba(255,255,255,.25); border-radius:18px; background:linear-gradient(160deg,#35121f 0%,#1d1720 55%,#111827 100%); color:#fff; box-shadow:0 24px 70px rgba(17,24,39,.35); opacity:0; transform:translateY(14px) scale(.98); pointer-events:none; transition:opacity .2s ease, transform .2s ease; }
             .khit-ai-panel.is-open { opacity:1; transform:translateY(0) scale(1); pointer-events:auto; }
             .khit-ai-panel.is-minimized { display:none; }
-            .khit-ai-header { display:flex; align-items:center; gap:10px; padding:14px 14px 12px; background:rgba(0,0,0,.18); cursor:move; user-select:none; touch-action:none; }
-            .khit-ai-header .khit-ai-mark { flex:0 0 auto; width:30px; height:30px; border-radius:9px; font-size:11px; }
+            .khit-ai-header { display:flex; align-items:center; gap:10px; padding:14px 14px 12px; background:linear-gradient(135deg,rgba(94,16,41,.98),rgba(143,23,56,.96)) !important; border-bottom:1px solid rgba(255,255,255,.16); color:#fff !important; cursor:move; user-select:none; touch-action:none; }
+            .khit-ai-header .khit-ai-mark { flex:0 0 auto; width:30px; height:30px; border-radius:9px; font-size:11px; color:#fff !important; border-color:#fff !important; opacity:1 !important; }
             .khit-ai-heading { min-width:0; flex:1; }
-            .khit-ai-heading strong { display:block; font-size:15px; }
-            .khit-ai-heading span { display:block; margin-top:3px; color:#f3dce3; font-size:11px; }
+            .khit-ai-heading strong { display:block; color:#fff !important; font-size:15px; }
+            .khit-ai-heading span { display:block; margin-top:3px; color:#f8e8ed !important; font-size:11px; }
             .khit-ai-icon-btn { width:30px; height:30px; padding:0; border:1px solid rgba(255,255,255,.24); border-radius:8px; background:rgba(255,255,255,.08); color:#fff; cursor:pointer; font-size:16px; line-height:1; }
             .khit-ai-icon-btn:hover, .khit-ai-icon-btn:focus-visible { background:rgba(255,255,255,.18); outline:2px solid var(--ai-gold); outline-offset:2px; }
             .khit-ai-body { display:flex; flex:1; min-height:0; flex-direction:column; }
