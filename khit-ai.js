@@ -2,8 +2,8 @@
     if (window.khitAiAssistant) return;
 
     const storageKey = "khit_ai_ui_state";
-    const defaultOpenVersion = 1;
-    const defaultState = { x: null, y: null, panelX: null, panelY: null, open: true, minimized: false };
+    const defaultOpenVersion = 2;
+    const defaultState = { x: null, y: null, panelX: null, panelY: null, open: false, minimized: false };
     const copy = {
         en: {
             label: "KHIT AI",
@@ -56,7 +56,7 @@
             const stored = JSON.parse(localStorage.getItem(storageKey) || "{}");
             const state = { ...defaultState, ...stored };
             if (stored.defaultOpenVersion !== defaultOpenVersion) {
-                state.open = true;
+                state.open = false;
                 state.minimized = false;
                 state.defaultOpenVersion = defaultOpenVersion;
                 saveState(state);
