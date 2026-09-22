@@ -61,6 +61,15 @@ function ordinalIndex(message) {
     return number ? Number(number[1]) - 1 : null;
 }
 
+function findResultSubject(message, rows) {
+    const normalized = String(message || "").toLowerCase();
+    return (rows || []).find(row => {
+        const subject = String(row.subject || "").toLowerCase();
+        const code = String(row.subject_code || "").toLowerCase();
+        return (subject && normalized.includes(subject)) || (code && normalized.includes(code));
+    });
+}
+
 function formatOfficialItems(rows, label, message, details) {
     if (!rows.length) return null;
     const telugu = isTeluguLike(message);
@@ -81,20 +90,12 @@ function formatOfficialItems(rows, label, message, details) {
     return { message: `${prefix}\n${lines.join("\n")}\n${follow}`, items };
 }
 
-function createKhitAiService({ db, postgres, parentFamily, departmentHierarchy }) {
+function createKhitAiService({ parentFamily, departmentHierarchy, tools }) {
     const usePostgres = parentFamily.isPostgresConfigured();
-
-    async function queryOne(sql, params = []) {
-        return usePostgres ? postgres.get(sql, params) : db.prepare(sql).get(...params);
-    }
-
-    async function queryAll(sql, params = []) {
-        return usePostgres ? postgres.all(sql, params) : db.prepare(sql).all(...params);
-    }
 
     async function getStudentForUser(user) {
         if (user.role !== "student") return null;
-        return queryOne("SELECT id, student_id, full_name, department, year, section FROM students WHERE user_id = ?", [user.id]);
+        return tools.queryOne("SELECT id, student_id, full_name, department, year, section FROM students WHERE user_id = ?", [user.id]);
     }
 
     async function getAuthorizedStudent(user, requestedStudentId) {
@@ -126,7 +127,7 @@ function createKhitAiService({ db, postgres, parentFamily, departmentHierarchy }
         if (target.error) return target;
         const semester = parseSemester(message);
         if (!semester) return { message: isTelugu(message) ? "ఏ సంవత్సరం మరియు సెమిస్టర్ ఫలితం కావాలి? ఉదాహరణకు 3-1." : "Please specify the year and semester, for example 3-1." };
-        const rows = await queryAll(`
+        const rows = await tools.queryAll(`
             SELECT subject, subject_code, total_marks, grade, pass_status
             FROM result_records
             WHERE student_id = ? AND year = ? AND semester = ? AND publication_status = 'Published'
@@ -134,7 +135,7 @@ function createKhitAiService({ db, postgres, parentFamily, departmentHierarchy }
             LIMIT 20
         `, [target.student.id, semester.year, semester.semester]);
         if (!rows.length) {
-            const draft = await queryOne("SELECT 1 FROM result_records WHERE student_id = ? AND year = ? AND semester = ? LIMIT 1", [target.student.id, semester.year, semester.semester]);
+            const draft = await tools.queryOne("SELECT 1 FROM result_records WHERE student_id = ? AND year = ? AND semester = ? LIMIT 1", [target.student.id, semester.year, semester.semester]);
             return { message: draft
                 ? (isTelugu(message) ? `మీ ${semester.label} ఫలితం ఇంకా ప్రచురించలేదు.` : `Your ${semester.label} result is not published yet.`)
                 : (isTelugu(message) ? "అభ్యర్థించిన ఫలితం KHIT ఫ్యామిలీ పోర్టల్‌లో అందుబాటులో లేదు." : "The requested result is not available in the KHIT Family Portal.") };
@@ -146,7 +147,7 @@ function createKhitAiService({ db, postgres, parentFamily, departmentHierarchy }
         const target = await getAuthorizedStudent(user, requestedStudentId);
         if (target.error) return target;
         const subject = extractSubject(message);
-        const rows = await queryAll(`
+        const rows = await tools.queryAll(`
             SELECT subject, attendance_date, status
             FROM attendance WHERE student_id = ? ${subject ? "AND LOWER(subject) LIKE LOWER(?)" : ""}
             ORDER BY attendance_date DESC LIMIT 30
@@ -159,7 +160,7 @@ function createKhitAiService({ db, postgres, parentFamily, departmentHierarchy }
     async function fees(user, _message, requestedStudentId) {
         const target = await getAuthorizedStudent(user, requestedStudentId);
         if (target.error) return target;
-        const rows = await queryAll(`
+        const rows = await tools.queryAll(`
             SELECT fee_year, academic_year, total_amount, paid_amount, pending_amount, status
             FROM fees WHERE student_id = ? ORDER BY fee_year DESC, id DESC LIMIT 20
         `, [target.student.id]);
@@ -174,7 +175,7 @@ function createKhitAiService({ db, postgres, parentFamily, departmentHierarchy }
             if (scope.error) return scope;
             const branchFilter = scope.department ? "OR branch IN (?, ?)" : "";
             const branchParams = scope.department ? [scope.department, scope.department] : [];
-            const rows = await queryAll(`
+            const rows = await tools.queryAll(`
                 SELECT title, message, created_at
                 FROM notifications
                 WHERE audience = 'All' OR audience = 'All Students'
@@ -187,7 +188,7 @@ function createKhitAiService({ db, postgres, parentFamily, departmentHierarchy }
         }
         const target = await getAuthorizedStudent(user, requestedStudentId);
         if (target.error) return target;
-        const rows = await queryAll(`
+        const rows = await tools.queryAll(`
             SELECT title, message, created_at
             FROM notifications
             WHERE audience IN ('All', 'All Students', 'Parents')
@@ -218,7 +219,7 @@ function createKhitAiService({ db, postgres, parentFamily, departmentHierarchy }
         const scope = await officialScope(user, ["announcements.view", "announcements.manage"], requestedStudentId);
         if (scope.error) return scope;
         const audience = scope.target ? (user.role === "parent" ? "('All', 'All Students', 'Parents')" : "('All', 'All Students')") : "('All', 'All Students')";
-        const rows = await queryAll(`SELECT title, description, category, link_url, published_at, created_at FROM announcements WHERE published = ${usePostgres ? "TRUE" : "1"} AND audience IN ${audience} ORDER BY COALESCE(published_at, created_at) DESC, id DESC LIMIT 10`);
+        const rows = await tools.queryAll(`SELECT title, description, category, link_url, published_at, created_at FROM announcements WHERE published = ${usePostgres ? "TRUE" : "1"} AND audience IN ${audience} ORDER BY COALESCE(published_at, created_at) DESC, id DESC LIMIT 10`);
         if (!rows.length) return { message: isTelugu(message) ? "పోర్టల్‌లో అధికారిక ప్రకటన సమాచారం ప్రస్తుతం అందుబాటులో లేదు." : "No official announcement information is currently available in the portal." };
         const formatted = formatOfficialItems(rows, "announcement", message, row => ({ extra: row.category }));
         return { ...formatted, data: { announcements: rows } };
@@ -227,7 +228,7 @@ function createKhitAiService({ db, postgres, parentFamily, departmentHierarchy }
     async function eventsForUser(user, message) {
         const canReadEvents = ["student", "parent"].includes(user.role) || departmentHierarchy.hasRolePermission(user, "events.view");
         if (!canReadEvents) return { error: AUTHORIZED_MESSAGE, status: 403 };
-        const rows = await queryAll(`SELECT title, description, event_date, event_time, venue, category FROM events WHERE published = ${usePostgres ? "TRUE" : "1"} AND (audience = 'All' OR audience IS NULL) ORDER BY event_date ASC, id ASC LIMIT 20`);
+        const rows = await tools.queryAll(`SELECT title, description, event_date, event_time, venue, category FROM events WHERE published = ${usePostgres ? "TRUE" : "1"} AND (audience = 'All' OR audience IS NULL) ORDER BY event_date ASC, id ASC LIMIT 20`);
         if (!rows.length) return { message: isTelugu(message) ? "అధికారిక కళాశాల ఈవెంట్ సమాచారం ప్రస్తుతం అందుబాటులో లేదు." : "No official college event information is currently available." };
         const formatted = formatOfficialItems(rows, "event", message, row => ({ extra: [row.event_time, row.venue].filter(Boolean).join(" at ") }));
         return { ...formatted, data: { events: rows } };
@@ -252,7 +253,7 @@ function createKhitAiService({ db, postgres, parentFamily, departmentHierarchy }
             conditions.push("(section IS NULL OR section = ?)");
             params.push(student.section);
         }
-        const rows = await queryAll(`
+        const rows = await tools.queryAll(`
             SELECT title, description, material_type, file_url, subject, department, year, section, created_at
             FROM study_materials
             ${conditions.length ? `WHERE ${conditions.join(" AND ")}` : ""}
@@ -267,7 +268,7 @@ function createKhitAiService({ db, postgres, parentFamily, departmentHierarchy }
         const scope = await officialScope(user, "documents.view", requestedStudentId);
         if (scope.error) return scope;
         const student = scope.target?.student;
-        const rows = await queryAll(`
+        const rows = await tools.queryAll(`
             SELECT d.title AS document_name, d.category AS document_type, d.created_at AS uploaded_at
             FROM documents d
             ${student ? "WHERE d.visibility = 'Public' OR d.student_id = ?" : "WHERE d.visibility = 'Public'"}
@@ -281,7 +282,7 @@ function createKhitAiService({ db, postgres, parentFamily, departmentHierarchy }
     async function assignments(user, _message, requestedStudentId) {
         const target = await getAuthorizedStudent(user, requestedStudentId);
         if (target.error) return target;
-        const rows = await queryAll(`
+        const rows = await tools.queryAll(`
             SELECT a.title, a.description, a.deadline AS due_date, s.name AS subject_name
             FROM assignments a LEFT JOIN subjects s ON s.id = a.subject_id
             WHERE s.id IS NULL OR (s.department = ? AND (s.year IS NULL OR s.year = ?) AND (s.section IS NULL OR s.section = ?))
@@ -294,7 +295,7 @@ function createKhitAiService({ db, postgres, parentFamily, departmentHierarchy }
     async function events(user, message) {
         const canReadEvents = ["student", "parent"].includes(user.role) || departmentHierarchy.hasRolePermission(user, "events.view");
         if (!canReadEvents) return { error: AUTHORIZED_MESSAGE, status: 403 };
-        const rows = await queryAll(`
+        const rows = await tools.queryAll(`
             SELECT title, description, event_date, event_time, venue, category
             FROM events WHERE published = TRUE AND (audience = 'All' OR audience IS NULL)
             ORDER BY event_date DESC, id DESC LIMIT 20
@@ -303,10 +304,53 @@ function createKhitAiService({ db, postgres, parentFamily, departmentHierarchy }
         return { message: isTelugu(message) ? `${rows.length} అధికారిక కళాశాల ఈవెంట్లు కనిపించాయి.` : `I found ${rows.length} official college event${rows.length === 1 ? "" : "s"}.`, data: { events: rows } };
     }
 
+    async function publicItems(intent, message) {
+        if (intent === "events") {
+            const rows = await tools.queryAll(`
+                SELECT title, description, event_date, event_time, venue, category
+                FROM events
+                WHERE published = ${usePostgres ? "TRUE" : "1"}
+                  AND (audience = 'All' OR audience IS NULL)
+                ORDER BY event_date ASC, id ASC
+                LIMIT 20
+            `);
+            if (!rows.length) return { message: isTelugu(message) ? "ప్రజా కళాశాల ఈవెంట్లు ప్రస్తుతం అందుబాటులో లేవు." : "No public college events are currently available." };
+            const formatted = formatOfficialItems(rows, "event", message, row => ({ extra: [row.event_time, row.venue].filter(Boolean).join(" at ") }));
+            return { ...formatted, data: { events: rows } };
+        }
+        if (intent === "announcements") {
+            const rows = await tools.queryAll(`
+                SELECT title, description, category, link_url, published_at, created_at
+                FROM announcements
+                WHERE published = ${usePostgres ? "TRUE" : "1"}
+                  AND audience IN ('All', 'All Students')
+                ORDER BY COALESCE(published_at, created_at) DESC, id DESC
+                LIMIT 10
+            `);
+            if (!rows.length) return { message: isTelugu(message) ? "అధికారిక ప్రకటనలు ప్రస్తుతం అందుబాటులో లేవు." : "No public announcements are currently available." };
+            const formatted = formatOfficialItems(rows, "announcement", message, row => ({ extra: row.category }));
+            return { ...formatted, data: { announcements: rows } };
+        }
+        const rows = await tools.queryAll(`
+            SELECT title, message, created_at
+            FROM notifications
+            WHERE audience IN ('All', 'All Students')
+            ORDER BY created_at DESC
+            LIMIT 10
+        `);
+        if (!rows.length) return { message: isTelugu(message) ? "ప్రజా నోటిఫికేషన్లు ప్రస్తుతం అందుబాటులో లేవు." : "No public notifications are currently available." };
+        const formatted = formatOfficialItems(rows, "notification", message, row => ({ extra: row.message ? String(row.message).slice(0, 90) : null }));
+        return { ...formatted, data: { notifications: rows } };
+    }
+
     async function handle({ user, message, studentId }) {
         const normalized = normalizeMessage(message);
         if (!normalized) return { error: "A question is required.", status: 400 };
         let intent = detectIntent(normalized);
+        if (!user) {
+            if (["events", "announcements", "notifications"].includes(intent)) return { intent, ...(await publicItems(intent, normalized)) };
+            return { intent, error: "Please sign in to access your authorized KHIT Family information.", status: 401 };
+        }
         const contextKey = `${user.role}:${user.id}:${user.parent_id || ""}:${studentId || ""}`;
         const prior = followUpContext.get(contextKey);
         if (intent === "followup" && prior?.items?.length) {
@@ -323,13 +367,25 @@ function createKhitAiService({ db, postgres, parentFamily, departmentHierarchy }
         }
         if (intent === "followup" && prior?.intent === "results") intent = "results";
         if (intent === "outside" && prior?.intent === "attendance" && extractSubject(normalized)) intent = "attendance";
+        if (intent === "outside" && prior?.intent === "results") {
+            const subjectResult = findResultSubject(normalized, prior.data?.result);
+            if (subjectResult) {
+                return {
+                    intent: "results",
+                    message: isTelugu(normalized)
+                        ? `${subjectResult.subject}: ${subjectResult.total_marks ?? "మార్కులు అందుబాటులో లేవు"}, గ్రేడ్ ${subjectResult.grade || "అందుబాటులో లేదు"}.`
+                        : `${subjectResult.subject}: ${subjectResult.total_marks ?? "Marks unavailable"}, grade ${subjectResult.grade || "not available"}.`,
+                    data: { result: [subjectResult] }
+                };
+            }
+        }
         if (intent === "protected") return { intent, error: AUTHORIZED_MESSAGE, status: 403 };
         if (intent === "outside") return { intent, message: CLOSED_DOMAIN_MESSAGE };
         if (intent === "followup") return { intent: "results", message: isTelugu(normalized) ? "ఏ సెమిస్టర్ ఫలితం చూడాలి?" : "Which semester result would you like me to check?" };
         const handler = { results, attendance, fees, notifications, announcements, events: eventsForUser, assignments, materials, documents }[intent];
         if (!handler) return { intent, message: CLOSED_DOMAIN_MESSAGE };
         const result = await handler(user, normalized, studentId);
-        followUpContext.set(contextKey, { intent, items: result.items || [], at: Date.now() });
+        followUpContext.set(contextKey, { intent, items: result.items || [], data: result.data || null, at: Date.now() });
         for (const [key, value] of followUpContext) if (Date.now() - value.at > 10 * 60 * 1000) followUpContext.delete(key);
         return { intent, ...result };
     }

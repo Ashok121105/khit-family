@@ -2,7 +2,8 @@
     if (window.khitAiAssistant) return;
 
     const storageKey = "khit_ai_ui_state";
-    const defaultState = { x: null, y: null, panelX: null, panelY: null, open: false, minimized: false };
+    const defaultOpenVersion = 1;
+    const defaultState = { x: null, y: null, panelX: null, panelY: null, open: true, minimized: false };
     const copy = {
         en: {
             label: "KHIT AI",
@@ -52,14 +53,22 @@
 
     function readState() {
         try {
-            return { ...defaultState, ...(JSON.parse(localStorage.getItem(storageKey) || "{}")) };
+            const stored = JSON.parse(localStorage.getItem(storageKey) || "{}");
+            const state = { ...defaultState, ...stored };
+            if (stored.defaultOpenVersion !== defaultOpenVersion) {
+                state.open = true;
+                state.minimized = false;
+                state.defaultOpenVersion = defaultOpenVersion;
+                saveState(state);
+            }
+            return state;
         } catch (_error) {
             return { ...defaultState };
         }
     }
 
     function saveState(state) {
-        localStorage.setItem(storageKey, JSON.stringify({ x: state.x, y: state.y, panelX: state.panelX, panelY: state.panelY, open: state.open, minimized: state.minimized }));
+        localStorage.setItem(storageKey, JSON.stringify({ x: state.x, y: state.y, panelX: state.panelX, panelY: state.panelY, open: state.open, minimized: state.minimized, defaultOpenVersion }));
     }
 
     function currentLanguage() {
@@ -187,7 +196,8 @@
             }
             const loadingMessage = addMessage(text("working"));
             try {
-                const response = await fetch("/api/khit-ai/chat", {
+                const apiBase = window.KHIT_API_BASE || window.location.origin;
+                const response = await fetch(`${apiBase}/api/khit-ai/chat`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
                     body: JSON.stringify(body)

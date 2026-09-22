@@ -23,6 +23,7 @@ const postgres = require("./database/postgres-adapter");
 const parentFamily = require("./database/parent-family");
 const departmentHierarchy = require("./database/department-hierarchy");
 const { createKhitAiService } = require("./khit-ai-service");
+const { createKhitAiTools } = require("./khit-ai-tools");
 const { createStorageAdapter } = require("./storage/storage");
 
 const app = express();
@@ -1669,6 +1670,17 @@ function authenticateToken(req, res, next) {
 
 }
 
+function optionalAuthenticateToken(req, res, next) {
+    const token = getTokenFromRequest(req);
+    if (!token) return next();
+    try {
+        req.user = jwt.verify(token, JWT_SECRET);
+    } catch (_error) {
+        return res.status(401).json({ status: "error", message: "Invalid or expired token" });
+    }
+    return next();
+}
+
 
 // ============================================================
 // STUDENT AUTH MIDDLEWARE
@@ -1957,11 +1969,15 @@ function getManagementDepartment(req) {
     return null;
 }
 
-const khitAiService = createKhitAiService({
+const khitAiTools = createKhitAiTools({
     db,
     postgres,
+    usePostgres: parentFamily.isPostgresConfigured()
+});
+const khitAiService = createKhitAiService({
     parentFamily,
-    departmentHierarchy
+    departmentHierarchy,
+    tools: khitAiTools
 });
 
 async function recordKhitAiAudit(userId, intent, success) {
@@ -1986,7 +2002,7 @@ async function recordKhitAiAudit(userId, intent, success) {
 
 app.post(
     "/api/khit-ai/chat",
-    authenticateToken,
+    optionalAuthenticateToken,
     async (req, res) => {
         const payload = req.body && typeof req.body === "object" ? req.body : {};
         const rawMessage = String(payload.message || "").trim();
@@ -2008,6 +2024,14 @@ app.post(
             });
         }
 
+        if (!req.user && !["events", "announcements", "notifications"].includes(khitAiService.detectIntent(message))) {
+            return res.status(401).json({
+                success: false,
+                status: "error",
+                message: "Please sign in to access your authorized KHIT Family information."
+            });
+        }
+
         try {
             const result = await khitAiService.handle({
                 user: req.user,
@@ -2015,7 +2039,7 @@ app.post(
                 studentId: requestedStudentId
             });
             const success = !result.error;
-            await recordKhitAiAudit(req.user.id, result.intent, success);
+            await recordKhitAiAudit(req.user?.id, result.intent, success);
 
             if (result.error) {
                 return res.status(result.status || 403).json({
@@ -2034,7 +2058,7 @@ app.post(
                 data: result.data || null
             });
         } catch (error) {
-            await recordKhitAiAudit(req.user.id, "unknown", false);
+            await recordKhitAiAudit(req.user?.id, "unknown", false);
             console.error("KHIT AI request error:", error.message);
             return res.status(500).json({
                 success: false,
