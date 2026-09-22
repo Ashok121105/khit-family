@@ -82,6 +82,29 @@ button,
     transition: transform 180ms ease, box-shadow 180ms ease, filter 180ms ease;
 }
 
+.admin-action.portal-action {
+    background: linear-gradient(135deg, var(--khit-maroon-dark) 0%, var(--khit-maroon) 100%) !important;
+    color: #ffffff !important;
+}
+
+.admin-avatar {
+    background: var(--khit-maroon) !important;
+}
+
+.brand {
+    color: var(--khit-maroon) !important;
+}
+
+.dashboard,
+.logout {
+    background: linear-gradient(135deg, var(--khit-maroon-dark) 0%, var(--khit-maroon) 100%) !important;
+    color: #ffffff !important;
+}
+
+.hero {
+    background: linear-gradient(135deg, var(--khit-maroon-dark) 0%, var(--khit-maroon) 100%) !important;
+}
+
 button:hover,
 .btn:hover,
 .portal-btn:hover,

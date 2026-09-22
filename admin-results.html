@@ -63,14 +63,14 @@
             padding: 0 20px 40px;
         }
         .hero {
-            background: linear-gradient(135deg, #7f1d1d, #1d4ed8);
+            background: linear-gradient(135deg, #7f1d1d, #8f1738);
             color: #fff;
             border-radius: 16px;
             padding: 28px;
             margin-bottom: 22px;
         }
         .hero h2 { margin: 0 0 8px; font-size: 30px; }
-        .hero p { margin: 0; color: #dbeafe; }
+        .hero p { margin: 0; color: #f7e8eb; }
         .filters {
             display: grid;
             grid-template-columns: repeat(6, minmax(120px, 1fr));
@@ -532,8 +532,8 @@
             const maxValue = Math.max(...values, 100);
             const barStep = chartWidth / labels.length;
             const barWidth = Math.min(74, barStep * 0.6);
-            const colors = ['#2563eb', '#f59e0b', '#10b981', '#ef4444', '#8b5cf6', '#14b8a6', '#f97316', '#06b6d4'];
-            const demoAccentColors = ['#2563eb', '#f97316', '#10b981'];
+            const colors = ['#8f1738', '#f59e0b', '#10b981', '#ef4444', '#8b5cf6', '#14b8a6', '#f97316', '#06b6d4'];
+            const demoAccentColors = ['#8f1738', '#f97316', '#10b981'];
 
             ctx.clearRect(0, 0, width, height);
             ctx.fillStyle = '#ffffff';
