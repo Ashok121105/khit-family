@@ -113,8 +113,8 @@
             .khit-ai-quick button { border:1px solid rgba(255,255,255,.24); border-radius:999px; padding:7px 9px; background:rgba(255,255,255,.08); color:#fff; cursor:pointer; font-size:11px; }
             .khit-ai-quick button:hover, .khit-ai-quick button:focus-visible { background:rgba(198,161,91,.24); outline:2px solid var(--ai-gold); outline-offset:2px; }
             .khit-ai-form { display:flex; gap:8px; padding:12px; border-top:1px solid rgba(255,255,255,.14); background:rgba(0,0,0,.16); }
-            .khit-ai-form input { min-width:0; flex:1; border:1px solid rgba(255,255,255,.22); border-radius:9px; padding:10px; background:rgba(255,255,255,.1); color:#fff; font:13px Arial,sans-serif; }
-            .khit-ai-form input::placeholder { color:#e8cbd4; }
+            .khit-ai-form input { min-width:0; flex:1; border:1px solid rgba(255,255,255,.3) !important; border-radius:9px; padding:10px; background:rgba(255,255,255,.16) !important; color:#fff !important; caret-color:#fff; font:13px Arial,sans-serif; }
+            .khit-ai-form input::placeholder { color:#f8e8ed !important; opacity:1; }
             .khit-ai-form input:focus { outline:2px solid var(--ai-gold); outline-offset:1px; }
             .khit-ai-form button { border:0; border-radius:9px; padding:0 13px; background:var(--ai-gold); color:#301522; cursor:pointer; font-weight:800; }
             .khit-ai-form button:focus-visible { outline:2px solid #fff; outline-offset:2px; }
@@ -185,10 +185,6 @@
 
         async function askKhitAi(question) {
             const token = getSessionToken();
-            if (!token) {
-                addMessage(text("session"));
-                return;
-            }
             const body = { message: question };
             if (localStorage.getItem("khit_parent_token")) {
                 const selectedChild = localStorage.getItem("khit_parent_selected_student_id");
@@ -197,9 +193,11 @@
             const loadingMessage = addMessage(text("working"));
             try {
                 const apiBase = window.KHIT_API_BASE || window.location.origin;
+                const headers = { "Content-Type": "application/json" };
+                if (token) headers.Authorization = `Bearer ${token}`;
                 const response = await fetch(`${apiBase}/api/khit-ai/chat`, {
                     method: "POST",
-                    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+                    headers,
                     body: JSON.stringify(body)
                 });
                 const result = await response.json();
