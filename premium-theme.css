@@ -105,6 +105,42 @@ button,
     background: linear-gradient(135deg, var(--khit-maroon-dark) 0%, var(--khit-maroon) 100%) !important;
 }
 
+body.management-dashboard header {
+    background: linear-gradient(135deg, var(--khit-maroon-dark) 0%, var(--khit-maroon) 100%) !important;
+    color: #ffffff !important;
+}
+
+body.management-dashboard header h1,
+body.management-dashboard header p,
+body.management-dashboard header .actions a,
+body.management-dashboard header .actions button {
+    color: #ffffff !important;
+}
+
+body.management-dashboard .hero {
+    padding: 28px 30px !important;
+    border-radius: 16px;
+    color: #ffffff !important;
+    box-shadow: 0 20px 38px rgba(95, 16, 41, 0.2) !important;
+}
+
+body.management-dashboard .hero h2,
+body.management-dashboard .hero p,
+body.management-dashboard .scope,
+body.management-dashboard .scope span {
+    color: #ffffff !important;
+}
+
+body.management-dashboard .scope strong {
+    color: #f6d89b !important;
+}
+
+body.management-dashboard .card,
+body.management-dashboard .panel {
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.96) !important;
+}
+
 button:hover,
 .btn:hover,
 .portal-btn:hover,
