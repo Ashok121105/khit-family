@@ -134,7 +134,7 @@
                 const existingButton = wrapper.querySelector("button");
                 if (existingButton) {
                     existingButton.classList.add("khit-password-toggle");
-                    if (!existingButton.textContent.trim()) existingButton.textContent = "👁";
+                    existingButton.textContent = "🙈";
                 }
                 return;
             }
@@ -147,13 +147,13 @@
             const toggle = document.createElement("button");
             toggle.type = "button";
             toggle.className = "khit-password-toggle";
-            toggle.textContent = "👁";
+            toggle.textContent = "🙈";
             toggle.setAttribute("aria-label", "Show password");
             toggle.title = "Show password";
             toggle.addEventListener("click", () => {
                 const visible = input.type === "text";
                 input.type = visible ? "password" : "text";
-                toggle.textContent = visible ? "👁" : "🙈";
+                toggle.textContent = visible ? "🙈" : "👁";
                 toggle.setAttribute("aria-label", visible ? "Show password" : "Hide password");
                 toggle.title = visible ? "Show password" : "Hide password";
             });
