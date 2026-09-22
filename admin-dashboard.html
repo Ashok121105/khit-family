@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+    <script src="language.js"></script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
@@ -455,6 +456,7 @@ body {
 }
 </style>
     <link rel='stylesheet' href='premium-theme.css'>
+    <script src="api-config.js"></script>
 </head>
 
 <body>
@@ -493,19 +495,19 @@ body {
             Management
         </div>
 
-        <a href="#" onclick="openStudents()">
+        <a href="admin-students.html">
              Students
         </a>
 
-        <a href="#" onclick="openFaculty()">
+        <a href="admin-faculty.html">
              Faculty
         </a>
 
-        <a href="#" onclick="openFees()">
+        <a href="admin-fees.html">
              Fees
         </a>
 
-        <a href="#" onclick="openBus()">
+        <a href="admin-bus.html">
              Bus Management
         </a>
 
@@ -514,21 +516,15 @@ body {
             Academic
         </div>
 
-        <a href="#">
-             Academics
-        </a>
+           <span class="menu-disabled" aria-disabled="true">Academics · Coming soon</span>
 
-        <a href="#">
-             Timetable
-        </a>
+           <span class="menu-disabled" aria-disabled="true">Timetable · Coming soon</span>
 
         <a href="admin-results.html">
              Exams & Results
         </a>
 
-        <a href="#">
-             Attendance
-        </a>
+           <span class="menu-disabled" aria-disabled="true">Attendance · Coming soon</span>
 
 
         <div class="menu-title">
@@ -539,46 +535,32 @@ body {
              Notifications
         </a>
 
-        <a href="#">
-             Events
-        </a>
+           <a href="admin-events.html">Events</a>
 
 
         <div class="menu-title">
             Career
         </div>
 
-        <a href="#">
-             Placements
-        </a>
+           <span class="menu-disabled" aria-disabled="true">Placements · Coming soon</span>
 
-        <a href="#">
-             Internships
-        </a>
+           <span class="menu-disabled" aria-disabled="true">Internships · Coming soon</span>
 
 
         <div class="menu-title">
             Documents
         </div>
 
-        <a href="#">
-             Documents
-        </a>
+           <a href="admin-documents.html">Documents</a>
 
 
         <div class="menu-title">
             System
         </div>
 
-        <a href="#">
-             Settings
-        </a>
+           <a href="admin-settings.html">Settings</a>
 
-        <a
-            href="#"
-            onclick="logout()">
-             Logout
-        </a>
+        <button type="button" class="menu-logout" onclick="logout()">Logout</button>
 
            <a href="index.html">
                Back to Portal
@@ -904,6 +886,7 @@ async function loadDashboardStats() {
 loadDashboardStats();
 
 </script>
+<script src="khit-ai.js"></script>
 
 </body>
 

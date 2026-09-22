@@ -1,6 +1,8 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+  <script src="language.js"></script>
+  <script src="api-config.js"></script>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Admin Reports | KHIT Family</title>
@@ -50,6 +52,27 @@
       cursor: pointer;
       font-weight: 600;
     }
+    .dashboard-btn {
+      background: #e2e8f0;
+      color: #0f172a;
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
+      padding: 9px 12px;
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .error-message {
+      display: none;
+      margin-bottom: 20px;
+      padding: 14px 16px;
+      border: 1px solid #fecaca;
+      border-radius: 10px;
+      background: #fff1f2;
+      color: #991b1b;
+      font-size: 13px;
+    }
+    .error-message.show { display: block; }
     .container {
       max-width: 1200px;
       margin: 30px auto;
@@ -143,11 +166,13 @@
     </div>
     <div class="top-actions">
       <span class="user-pill" id="headerUser">Admin</span>
+      <a class="dashboard-btn" href="admin-dashboard.html">Dashboard</a>
       <button class="logout-btn" onclick="logout()">Logout</button>
     </div>
   </header>
 
   <main class="container">
+    <div id="errorMessage" class="error-message" role="alert"></div>
     <section class="hero">
       <h2 id="heroTitle">Loading report data...</h2>
       <p id="heroSubtitle">Monitoring student, attendance and fee trends across the college.</p>
@@ -308,8 +333,14 @@
           }
         });
 
-        if (response.status === 401 || response.status === 403) {
+        if (response.status === 401) {
           logout();
+          return;
+        }
+        if (response.status === 403) {
+          const denied = await response.json();
+          document.getElementById('errorMessage').textContent = denied.message || 'You are not authorized to view these reports.';
+          document.getElementById('errorMessage').classList.add('show');
           return;
         }
 
@@ -340,8 +371,8 @@
         renderAttendanceTable(attendanceRows);
       } catch (error) {
         console.error(error);
-        alert(error.message || 'Unable to load reports');
-        logout();
+        document.getElementById('errorMessage').textContent = error.message || 'Unable to load reports';
+        document.getElementById('errorMessage').classList.add('show');
       }
     }
 

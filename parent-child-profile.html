@@ -1,6 +1,8 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+<script src="language.js"></script>
+<script src="api-config.js"></script>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Child Profile | KHIT Family</title>
@@ -167,7 +169,7 @@
       <h2 id="heroTitle">Loading student profile...</h2>
       <p id="heroSubtitle">Please wait while the child details are being loaded.</p>
       <div class="action-row">
-        <a class="secondary-btn" href="parent-dashboard.html">Back to Dashboard</a>
+        <a class="secondary-btn" id="dashboardLink" href="parent-dashboard.html">Back to Dashboard</a>
       </div>
     </section>
 
@@ -234,6 +236,8 @@
   <script>
     const token = localStorage.getItem('khit_parent_token');
     const user = JSON.parse(localStorage.getItem('khit_parent_user') || '{}');
+    const selectedChildId = new URLSearchParams(window.location.search).get('student_id') || localStorage.getItem('khit_parent_selected_student_id');
+    const apiBase = `${window.KHIT_API_BASE}/api/parent`;
 
     if (!token) {
       window.location.href = 'parent-login.html';
@@ -323,8 +327,15 @@
     }
 
     async function loadProfile() {
+      if (!selectedChildId) {
+        document.getElementById('heroTitle').textContent = 'No child selected';
+        document.getElementById('heroSubtitle').textContent = 'Return to the parent dashboard and select a linked child.';
+        return;
+      }
+      localStorage.setItem('khit_parent_selected_student_id', String(selectedChildId));
+      document.getElementById('dashboardLink').href = `parent-dashboard.html?student_id=${encodeURIComponent(selectedChildId)}`;
       try {
-        const response = await fetch('http://localhost:5000/api/parent/student-profile', {
+        const response = await fetch(`${apiBase}/student-profile?student_id=${encodeURIComponent(selectedChildId)}`, {
           headers: {
             'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json'
@@ -333,7 +344,12 @@
 
         const result = await response.json();
 
+        if (response.status === 401) {
+          logout();
+          return;
+        }
         if (!response.ok) {
+          if (response.status === 403) throw new Error('This child is not linked to the logged-in parent.');
           throw new Error(result.message || 'Unable to load child profile');
         }
 
@@ -384,6 +400,7 @@
     function logout() {
       localStorage.removeItem('khit_parent_token');
       localStorage.removeItem('khit_parent_user');
+      localStorage.removeItem('khit_parent_selected_student_id');
       window.location.href = 'parent-login.html';
     }
 

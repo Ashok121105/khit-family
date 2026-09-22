@@ -4,8 +4,11 @@
 // Node.js + Express + SQLite
 // ============================================================
 
+require("dotenv").config();
+
 const express = require("express");
 const cors = require("cors");
+const helmet = require("helmet");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const nodemailer = require("nodemailer");
@@ -16,20 +19,48 @@ const path = require("path");
 const fs = require("fs");
 
 const db = require("./database/database");
+const postgres = require("./database/postgres-adapter");
+const parentFamily = require("./database/parent-family");
+const departmentHierarchy = require("./database/department-hierarchy");
+const { createKhitAiService } = require("./khit-ai-service");
+const { createStorageAdapter } = require("./storage/storage");
 
 const app = express();
 
-const PORT = process.env.PORT || 5000;
-const JWT_SECRET =
-    process.env.JWT_SECRET || "khit_family_secret_2026";
-const ALLOWED_ADMIN_USERNAME = "Ashok1211";
-const ALLOWED_ADMIN_PASSWORD = "Ashok@1211";
+const PORT = Number(process.env.PORT || 5000);
+const HOST = process.env.HOST || "0.0.0.0";
+const isProduction = process.env.NODE_ENV === "production";
+const JWT_SECRET = process.env.JWT_SECRET || null;
+const ALLOWED_ADMIN_USERNAME = process.env.ADMIN_USERNAME || null;
+const ALLOWED_ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || null;
 
-const uploadDirectory = path.join(__dirname, "uploads");
+if (!JWT_SECRET) {
+    throw new Error("JWT_SECRET must be configured in the environment");
+}
+
+if (!ALLOWED_ADMIN_USERNAME || !ALLOWED_ADMIN_PASSWORD) {
+    throw new Error("ADMIN_USERNAME and ADMIN_PASSWORD must be configured in the environment");
+}
+
+const configuredUploadPath = process.env.UPLOAD_PATH || "./uploads";
+const uploadDirectory = path.resolve(__dirname, configuredUploadPath);
+const storageProvider = String(process.env.STORAGE_PROVIDER || process.env.UPLOAD_STORAGE || "local").toLowerCase();
+const uploadPublicByDefault = process.env.UPLOAD_PUBLIC === "true" || (process.env.NODE_ENV !== "production" && process.env.UPLOAD_PUBLIC !== "false");
+const uploadMaxMegabytes = Number(process.env.UPLOAD_MAX_FILE_SIZE_MB || 10);
+const maxUploadBytes = Number.isFinite(uploadMaxMegabytes) && uploadMaxMegabytes > 0
+    ? uploadMaxMegabytes * 1024 * 1024
+    : 10 * 1024 * 1024;
 
 if (!fs.existsSync(uploadDirectory)) {
     fs.mkdirSync(uploadDirectory, { recursive: true });
 }
+
+const storage = createStorageAdapter({
+    rootDir: uploadDirectory,
+    baseUrl: "/uploads",
+    provider: storageProvider
+});
+const usesObjectStorage = ["s3", "object-storage", "cloud"].includes(storageProvider);
 
 const allowedUploadExtensions = new Set([
     ".pdf",
@@ -47,6 +78,24 @@ const allowedUploadExtensions = new Set([
     ".mp4"
 ]);
 
+const blockedUploadExtensions = new Set([
+    ".exe",
+    ".bat",
+    ".cmd",
+    ".com",
+    ".scr",
+    ".js",
+    ".jar",
+    ".ps1",
+    ".sh",
+    ".php",
+    ".html",
+    ".htm",
+    ".svg",
+    ".msi",
+    ".dll"
+]);
+
 const upload = multer({
     storage: multer.diskStorage({
         destination: uploadDirectory,
@@ -55,20 +104,41 @@ const upload = multer({
             const baseName = path
                 .basename(file.originalname, extension)
                 .replace(/[^a-zA-Z0-9_-]/g, "-")
-                .slice(0, 60);
+                .replace(/-+/g, "-")
+                .slice(0, 60) || "upload";
 
-            callback(
-                null,
-                `${Date.now()}-${crypto.randomBytes(8).toString("hex")}-${baseName || "upload"}${extension}`
-            );
+            callback(null, storage.sanitizeFileName(`${baseName}${extension}`));
         }
     }),
     limits: {
-        fileSize: 10 * 1024 * 1024
+        fileSize: maxUploadBytes
     },
     fileFilter: (req, file, callback) => {
         const extension = path.extname(file.originalname).toLowerCase();
-        callback(null, allowedUploadExtensions.has(extension));
+        const mimeType = String(file.mimetype || "").toLowerCase();
+        const isAllowedExtension = allowedUploadExtensions.has(extension);
+        const isBlockedExtension = blockedUploadExtensions.has(extension);
+        const isAllowedMime = [
+            "application/pdf",
+            "application/msword",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/vnd.ms-excel",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "application/vnd.ms-powerpoint",
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            "text/csv",
+            "image/png",
+            "image/jpeg",
+            "image/webp",
+            "video/mp4",
+            "application/octet-stream"
+        ].includes(mimeType);
+
+        if (isBlockedExtension || !isAllowedExtension || !isAllowedMime) {
+            return callback(new Error("Unsupported or invalid upload type"));
+        }
+
+        callback(null, true);
     }
 });
 
@@ -77,7 +147,34 @@ const upload = multer({
 // MIDDLEWARE
 // ============================================================
 
-app.use(cors());
+const allowedOrigins = String(process.env.FRONTEND_URL || "")
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
+if (isProduction && !allowedOrigins.length) {
+    throw new Error("FRONTEND_URL must be configured in production");
+}
+
+app.use(helmet({
+    contentSecurityPolicy: false,
+    crossOriginResourcePolicy: false,
+    referrerPolicy: { policy: "strict-origin-when-cross-origin" }
+}));
+
+app.use(cors({
+    origin: allowedOrigins.length
+        ? (origin, callback) => {
+            if (!origin || allowedOrigins.includes(origin)) {
+                return callback(null, true);
+            }
+            return callback(new Error("Origin is not allowed by CORS"));
+        }
+        : true,
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"]
+}));
 
 app.use(express.json({ limit: "1mb" }));
 
@@ -137,6 +234,58 @@ function createRateLimiter({ windowMs, max, message }) {
 
         return next();
     };
+}
+
+function isValidEmail(value) {
+    return typeof value === "string" && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
+}
+
+function isValidMobile(value) {
+    const normalized = String(value || "").trim();
+    return /^\d{10,15}$/.test(normalized);
+}
+
+function isPositiveInteger(value, max = Number.MAX_SAFE_INTEGER) {
+    const parsed = Number(value);
+    return Number.isInteger(parsed) && parsed > 0 && parsed <= max;
+}
+
+function safeString(value, maxLength = 255) {
+    if (value === undefined || value === null) return "";
+    return String(value).trim().slice(0, maxLength);
+}
+
+const usePostgresRuntime = parentFamily.isPostgresConfigured();
+
+async function runtimeGet(sql, params = []) {
+    return usePostgresRuntime ? postgres.get(sql, params) : db.prepare(sql).get(...params);
+}
+
+async function runtimeAll(sql, params = []) {
+    return usePostgresRuntime ? postgres.all(sql, params) : db.prepare(sql).all(...params);
+}
+
+async function runtimeRun(sql, params = []) {
+    return usePostgresRuntime ? postgres.run(sql, params) : db.prepare(sql).run(...params);
+}
+
+function getLocalDevelopmentUser(sql, params = []) {
+    return db.prepare(sql).get(...params);
+}
+
+function sanitizeAuditMetadata(metadata) {
+    try {
+        return JSON.stringify(metadata);
+    } catch (_error) {
+        return JSON.stringify({ sanitized: true });
+    }
+}
+
+function sendServerError(res, statusCode, message, error) {
+    if (error) {
+        console.error(message, error);
+    }
+    return res.status(statusCode).json({ status: "error", message });
 }
 
 function getResultGrade(marks) {
@@ -262,8 +411,69 @@ const apiRateLimiter = createRateLimiter({
     message: "Too many requests. Please try again shortly."
 });
 
-app.use("/api", apiRateLimiter);
+const loginRateLimiter = createRateLimiter({
+    windowMs: 60 * 1000,
+    max: 12,
+    message: "Too many login attempts. Please wait before trying again."
+});
 
+const otpRateLimiter = createRateLimiter({
+    windowMs: 60 * 1000,
+    max: 8,
+    message: "Too many OTP requests. Please wait before trying again."
+});
+
+const khitAiRateLimiter = createRateLimiter({
+    windowMs: 60 * 1000,
+    max: 30,
+    message: "Too many KHIT AI requests. Please try again shortly."
+});
+
+const registrationRateLimiter = createRateLimiter({
+    windowMs: 60 * 1000,
+    max: 8,
+    message: "Too many registrations from this network. Please try later."
+});
+
+app.use("/api", apiRateLimiter);
+app.use("/api/login", loginRateLimiter);
+app.use("/api/student/login", loginRateLimiter);
+app.use("/api/faculty/login", loginRateLimiter);
+app.use("/api/parent/login", loginRateLimiter);
+app.use("/api/admin/login", loginRateLimiter);
+app.use("/api/password-reset/request", otpRateLimiter);
+app.use("/api/password-reset/confirm", otpRateLimiter);
+app.use("/api/khit-ai/chat", khitAiRateLimiter);
+app.use("/api/admin-password-reset/request", otpRateLimiter);
+app.use("/api/admin-password-reset/confirm", otpRateLimiter);
+app.use("/api/student/register", registrationRateLimiter);
+
+if (uploadPublicByDefault && !usesObjectStorage) {
+    app.use("/uploads", express.static(uploadDirectory, {
+        index: false,
+        redirect: false,
+        dotfiles: "ignore"
+    }));
+}
+
+// Inject the one shared assistant into every HTML page, including nested legacy pages.
+app.use((req, res, next) => {
+    if (req.method !== "GET" || !req.path.toLowerCase().endsWith(".html")) return next();
+
+    const requestedPath = decodeURIComponent(req.path).replace(/^\/+/, "");
+    const filePath = path.resolve(__dirname, requestedPath);
+    if (!filePath.startsWith(__dirname) || !fs.existsSync(filePath)) return next();
+
+    fs.readFile(filePath, "utf8", (error, html) => {
+        if (error) return next();
+        if (/<script\b[^>]+src=["'][^"']*khit-ai\.js(?:\?[^"']*)?["'][^>]*>/i.test(html)) {
+            res.type("html").send(html);
+            return;
+        }
+        const injectedHtml = html.replace(/<\/body>\s*<\/html>\s*$/i, '    <script src="/khit-ai.js"></script>\n</body>\n</html>');
+        res.type("html").send(injectedHtml === html ? `${html}\n<script src="/khit-ai.js"></script>` : injectedHtml);
+    });
+});
 
 // Serve frontend files
 app.use(express.static(path.join(__dirname)));
@@ -444,6 +654,18 @@ try {
     ensureStudentProfileColumns();
     ensureAuditLogColumns();
     migrateLegacyModuleColumns();
+    if (parentFamily.isPostgresConfigured()) {
+        parentFamily.ensurePostgresParentFamilyTables().catch((error) => {
+            console.error("PostgreSQL parent schema error:", error.message);
+        });
+        departmentHierarchy.ensurePostgresAuthorizationTables().catch((error) => {
+            console.error("PostgreSQL authorization schema error:", error.message);
+        });
+    } else {
+        parentFamily.ensureParentFamilyTables();
+        parentFamily.migrateLegacyParentData();
+    }
+    departmentHierarchy.ensureDepartmentHierarchyTables();
 
 } catch (error) {
 
@@ -563,8 +785,16 @@ try {
 
     console.log("app_settings table ready.");
 
-    ensureResultSeedData();
-    ensureDemoAccounts();
+    if (!isProduction) {
+        ensureResultSeedData();
+    }
+    if (parentFamily.isPostgresConfigured() && !isProduction) {
+        ensureDemoAccounts();
+    } else if (!parentFamily.isPostgresConfigured() && !isProduction) {
+        ensureDemoData().catch((error) => {
+            console.error("SQLite demo data setup error:", error);
+        });
+    }
 
 } catch (error) {
 
@@ -620,50 +850,56 @@ function createPasswordResetOtp() {
 
 async function ensureDemoAccounts() {
     try {
-        const customAdminUser = db.prepare(`
+        if (parentFamily.isPostgresConfigured()) {
+            await parentFamily.ensurePostgresParentFamilyTables();
+            await departmentHierarchy.ensurePostgresAuthorizationTables();
+        }
+        const customAdminUser = await postgres.get(`
             SELECT id
             FROM users
             WHERE username = ?
-        `).get(ALLOWED_ADMIN_USERNAME);
+        `, [ALLOWED_ADMIN_USERNAME]);
 
         if (!customAdminUser) {
             const customAdminPasswordHash = await bcrypt.hash(ALLOWED_ADMIN_PASSWORD, 10);
-            db.prepare(`
+            await postgres.run(`
                 INSERT INTO users (username, password, role)
                 VALUES (?, ?, 'admin')
-            `).run(ALLOWED_ADMIN_USERNAME, customAdminPasswordHash);
-            console.log(`Custom admin account created: ${ALLOWED_ADMIN_USERNAME} / ${ALLOWED_ADMIN_PASSWORD}`);
+            `, [ALLOWED_ADMIN_USERNAME, customAdminPasswordHash]);
+            console.log(`Custom admin account created for username: ${ALLOWED_ADMIN_USERNAME}`);
         }
 
-        const defaultAdminUser = db.prepare(`
+        const defaultAdminUser = await postgres.get(`
             SELECT id
             FROM users
             WHERE username = ?
-        `).get("admin");
+        `, ["admin"]);
 
-        if (defaultAdminUser) {
-            db.prepare(`
+        if (defaultAdminUser && ALLOWED_ADMIN_USERNAME !== "admin") {
+            await postgres.run(`
                 DELETE FROM users
                 WHERE username = ?
-            `).run("admin");
+            `, ["admin"]);
             console.log("Default demo admin removed to restrict access to the custom admin account.");
         }
 
-        const studentUser = db.prepare(`
+        const studentUser = await postgres.get(`
             SELECT u.id, s.id AS student_record_id, s.student_id
             FROM users u
             LEFT JOIN students s ON s.user_id = u.id
             WHERE u.username = ?
-        `).get("student");
+        `, ["student"]);
 
         if (!studentUser) {
             const studentPasswordHash = await bcrypt.hash("student123", 10);
-            const userResult = db.prepare(`
+            const userResult = await postgres.run(`
                 INSERT INTO users (username, password, role)
                 VALUES (?, ?, 'student')
-            `).run("student", studentPasswordHash);
+                RETURNING id
+            `, ["student", studentPasswordHash]);
+            const userId = userResult.lastInsertRowid ?? userResult.rows?.[0]?.id;
 
-            db.prepare(`
+            await postgres.run(`
                 INSERT INTO students (
                     user_id,
                     student_id,
@@ -685,8 +921,8 @@ async function ensureDemoAccounts() {
                     state,
                     pincode
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            `).run(
-                userResult.lastInsertRowid,
+            `, [
+                userId,
                 "STU-1001",
                 "STU-1001",
                 "Demo Student",
@@ -705,11 +941,11 @@ async function ensureDemoAccounts() {
                 "Rangareddy",
                 "Telangana",
                 "500001"
-            );
+            ]);
 
-            console.log("Demo student account created: student / student123");
+            console.log("Demo student account created for username: student");
         } else if (!studentUser.student_record_id) {
-            db.prepare(`
+            await postgres.run(`
                 INSERT INTO students (
                     user_id,
                     student_id,
@@ -731,7 +967,7 @@ async function ensureDemoAccounts() {
                     state,
                     pincode
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            `).run(
+            `, [
                 studentUser.id,
                 "STU-1001",
                 "STU-1001",
@@ -751,137 +987,302 @@ async function ensureDemoAccounts() {
                 "Rangareddy",
                 "Telangana",
                 "500001"
-            );
+            ]);
         }
 
-        const facultyUser = db.prepare(`
+        const facultyUser = await postgres.get(`
             SELECT u.id, f.id AS faculty_record_id
             FROM users u
             LEFT JOIN faculty f ON f.user_id = u.id
             WHERE u.username = ?
-        `).get("faculty");
+        `, ["faculty"]);
 
         if (!facultyUser) {
             const facultyPasswordHash = await bcrypt.hash("faculty123", 10);
-            const userResult = db.prepare(`
+            const userResult = await postgres.run(`
                 INSERT INTO users (username, password, role)
                 VALUES (?, ?, 'faculty')
-            `).run("faculty", facultyPasswordHash);
+                RETURNING id
+            `, ["faculty", facultyPasswordHash]);
+            const userId = userResult.lastInsertRowid ?? userResult.rows?.[0]?.id;
 
-            db.prepare(`
+            await postgres.run(`
                 INSERT INTO faculty (faculty_id, full_name, department, designation, email, mobile, user_id)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
-            `).run(
+            `, [
                 "FAC-1001",
                 "Demo Faculty",
                 "Computer Science",
                 "Assistant Professor",
                 "faculty@khit.edu.in",
                 "9988776655",
-                userResult.lastInsertRowid
-            );
+                userId
+            ]);
 
-            console.log("Demo faculty account created: faculty / faculty123");
+            console.log("Demo faculty account created for username: faculty");
         }
 
-        const demoStudent = db.prepare(`
+        const demoStudent = await postgres.get(`
             SELECT id
             FROM students
             WHERE student_id = ?
-        `).get("STU-1001");
+        `, ["STU-1001"]);
 
         if (demoStudent) {
-            const feeCount = db.prepare(`
-                SELECT COUNT(*) AS count
+            const feeCount = await postgres.get(`
+                SELECT COUNT(*)::int AS count
                 FROM fees
                 WHERE student_id = ?
-            `).get(demoStudent.id).count;
+            `, [demoStudent.id]);
 
-            if (feeCount === 0) {
-                db.prepare(`
+            if ((feeCount?.count || 0) === 0) {
+                await postgres.run(`
                     INSERT INTO fees (student_id, academic_year, fee_year, total_amount, paid_amount, pending_amount, status)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
-                `).run(demoStudent.id, "2026-27", 2, 45000, 28000, 17000, "Partial");
+                `, [demoStudent.id, "2026-27", 2, 45000, 28000, 17000, "Partial"]);
             }
 
-            const subjectCount = db.prepare(`SELECT COUNT(*) AS count FROM subjects`).get().count;
-            if (subjectCount === 0) {
-                db.prepare(`
+            const subjectCount = await postgres.get(`
+                SELECT COUNT(*)::int AS count
+                FROM subjects
+            `);
+            if ((subjectCount?.count || 0) === 0) {
+                await postgres.run(`
                     INSERT INTO subjects (name, code, department, year, semester, section)
                     VALUES (?, ?, ?, ?, ?, ?)
-                `).run("Data Structures", "DS-101", "Computer Science", 2, 3, "A");
-                db.prepare(`
+                `, ["Data Structures", "DS-101", "Computer Science", 2, 3, "A"]);
+                await postgres.run(`
                     INSERT INTO subjects (name, code, department, year, semester, section)
                     VALUES (?, ?, ?, ?, ?, ?)
-                `).run("Database Management Systems", "DBMS-201", "Computer Science", 2, 3, "A");
-                db.prepare(`
+                `, ["Database Management Systems", "DBMS-201", "Computer Science", 2, 3, "A"]);
+                await postgres.run(`
                     INSERT INTO subjects (name, code, department, year, semester, section)
                     VALUES (?, ?, ?, ?, ?, ?)
-                `).run("Operating Systems", "OS-301", "Computer Science", 2, 3, "A");
+                `, ["Operating Systems", "OS-301", "Computer Science", 2, 3, "A"]);
             }
 
-            const attendanceCount = db.prepare(`
-                SELECT COUNT(*) AS count
+            const attendanceCount = await postgres.get(`
+                SELECT COUNT(*)::int AS count
                 FROM attendance
                 WHERE student_id = ?
-            `).get(demoStudent.id).count;
+            `, [demoStudent.id]);
 
-            if (attendanceCount === 0) {
-                const subjects = db.prepare(`SELECT id, name FROM subjects ORDER BY id LIMIT 3`).all();
+            if ((attendanceCount?.count || 0) === 0) {
+                const subjects = await postgres.all(`
+                    SELECT id, name
+                    FROM subjects
+                    ORDER BY id
+                    LIMIT 3
+                `);
                 const dates = ["2026-09-02", "2026-09-04", "2026-09-06", "2026-09-09", "2026-09-11"];
                 const statuses = ["Present", "Present", "Absent", "Present", "Leave"];
 
                 for (let idx = 0; idx < dates.length; idx += 1) {
                     const subject = subjects[idx % subjects.length];
-                    db.prepare(`
+                    await postgres.run(`
                         INSERT INTO attendance (student_id, subject, attendance_date, status)
                         VALUES (?, ?, ?, ?)
-                    `).run(demoStudent.id, subject.name, dates[idx], statuses[idx]);
+                    `, [demoStudent.id, subject.name, dates[idx], statuses[idx]]);
                 }
             }
 
-            const marksCount = db.prepare(`
-                SELECT COUNT(*) AS count
+            const marksCount = await postgres.get(`
+                SELECT COUNT(*)::int AS count
                 FROM marks
                 WHERE student_id = ?
-            `).get(demoStudent.id).count;
+            `, [demoStudent.id]);
 
-            if (marksCount === 0) {
-                const subjects = db.prepare(`SELECT id, name FROM subjects ORDER BY id LIMIT 3`).all();
+            if ((marksCount?.count || 0) === 0) {
+                const subjects = await postgres.all(`
+                    SELECT id, name
+                    FROM subjects
+                    ORDER BY id
+                    LIMIT 3
+                `);
                 const sampleMarks = [
                     [subjects[0].id, "Midterm", 84, 100],
                     [subjects[1].id, "Quiz", 92, 100],
                     [subjects[2].id, "Assignment", 88, 100]
                 ];
 
-                sampleMarks.forEach(([subjectId, examType, marks, maxMarks]) => {
-                    db.prepare(`
+                for (const [subjectId, examType, marks, maxMarks] of sampleMarks) {
+                    await postgres.run(`
                         INSERT INTO marks (student_id, subject_id, exam_type, marks, max_marks, exam_date)
                         VALUES (?, ?, ?, ?, ?, ?)
-                    `).run(demoStudent.id, subjectId, examType, marks, maxMarks, "2026-09-15");
-                });
+                    `, [demoStudent.id, subjectId, examType, marks, maxMarks, "2026-09-15"]);
+                }
             }
 
-            const notificationCount = db.prepare(`SELECT COUNT(*) AS count FROM notifications`).get().count;
-            if (notificationCount === 0) {
-                db.prepare(`
+            const notificationCount = await postgres.get(`
+                SELECT COUNT(*)::int AS count
+                FROM notifications
+            `);
+            if ((notificationCount?.count || 0) === 0) {
+                await postgres.run(`
                     INSERT INTO notifications (title, message, audience, is_read, created_at)
-                    VALUES (?, ?, ?, ?, datetime('now'))
-                `).run("Welcome to KHIT Family", "Your student portal is ready. Please review your profile and fee updates.", "All", 0);
-                db.prepare(`
+                    VALUES (?, ?, ?, ?, NOW())
+                `, ["Welcome to KHIT Family", "Your student portal is ready. Please review your profile and fee updates.", "All", 0]);
+                await postgres.run(`
                     INSERT INTO notifications (title, message, audience, is_read, created_at)
-                    VALUES (?, ?, ?, ?, datetime('now'))
-                `).run("Mid-Semester Review", "Parents can now review attendance and marks from the dashboard.", "Parents", 0);
+                    VALUES (?, ?, ?, ?, NOW())
+                `, ["Mid-Semester Review", "Parents can now review attendance and marks from the dashboard.", "Parents", 0]);
             }
         }
 
         await ensureDemoData();
+        await ensureDevelopmentParentFixture();
+        await ensurePostgresManagementFixtures();
+        await ensurePostgresDemoContent();
     } catch (error) {
         console.error("Demo account setup error:", error);
     }
 }
 
+async function ensurePostgresManagementFixtures() {
+    if (!parentFamily.isPostgresConfigured() || isProduction) return;
+    const managementPassword = process.env.MANAGEMENT_TEST_PASSWORD;
+    if (!managementPassword) return;
+    const passwordHash = await bcrypt.hash(managementPassword, 10);
+    const fixtures = [
+        ["dev-assistant-hod-ece", "assistant_hod", "ECE"],
+        ["dev-associate-hod-ece", "associate_hod", "ECE"],
+        ["dev-hod-ece", "hod", "ECE"],
+        ["dev-ao", "ao", "CSE"],
+        ["dev-principal", "principal", "CSE"],
+        ["dev-director", "director", "CSE"],
+        ["dev-admin", "admin", null],
+        ["dev-superadmin", "superadmin", null],
+        ["dev-pg-assistant-hod-ece", "assistant_hod", "ECE"],
+        ["dev-pg-associate-hod-ece", "associate_hod", "ECE"],
+        ["dev-pg-hod-ece", "hod", "ECE"],
+        ["dev-pg-ao", "ao", "CSE"],
+        ["dev-pg-principal", "principal", "CSE"],
+        ["dev-pg-director", "director", "CSE"],
+        ["dev-pg-admin", "admin", null],
+        ["dev-pg-superadmin", "superadmin", null]
+    ];
+    for (const [username, role, departmentCode] of fixtures) {
+        const user = await postgres.get(`
+            INSERT INTO users (username, password, role, management_role)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT (username) DO UPDATE SET password = EXCLUDED.password, role = EXCLUDED.role, management_role = EXCLUDED.management_role
+            RETURNING id
+        `, [username, passwordHash, role, role]);
+        if (departmentCode) {
+            const department = await postgres.get("SELECT id FROM departments WHERE code = ?", [departmentCode]);
+            const roleRow = await postgres.get("SELECT id FROM roles WHERE name = ?", [role]);
+            if (department && roleRow) {
+                await postgres.run(`
+                    INSERT INTO user_departments (user_id, department_id, designation, role_name, is_primary)
+                    VALUES (?, ?, ?, ?, TRUE)
+                    ON CONFLICT (user_id, department_id, role_name) DO UPDATE SET is_primary = TRUE
+                `, [user.id, department.id, role, role]);
+                await postgres.run(`
+                    INSERT INTO user_role_scopes (user_id, role_id, scope, department_id)
+                    VALUES (?, ?, 'DEPARTMENT', ?)
+                    ON CONFLICT (user_id, role_id, department_id) DO UPDATE SET scope = EXCLUDED.scope
+                `, [user.id, roleRow.id, department.id]);
+            }
+        }
+    }
+}
+
+async function ensurePostgresDemoContent() {
+    if (!parentFamily.isPostgresConfigured() || isProduction) return;
+
+    const notifications = [
+        ["DEMO-28 Internal Assessment Schedule", "DEMO SAMPLE: Internal assessment schedule is available for portal demonstration.", "All Students", null, null, null],
+        ["DEMO-28 Fee Payment Reminder", "DEMO SAMPLE: Please review the fee section for a sample pending-payment reminder.", "All Students", null, null, null]
+    ];
+    for (const [title, message, audience, branch, year, section] of notifications) {
+        await postgres.run(`
+            INSERT INTO notifications (title, message, audience, is_read, created_at, branch, year, section)
+            SELECT ?, ?, ?, FALSE, CURRENT_TIMESTAMP, ?, ?, ?
+            WHERE NOT EXISTS (SELECT 1 FROM notifications WHERE title = ?)
+        `, [title, message, audience, branch, year, section, title]);
+    }
+
+    const events = [
+        ["DEMO-28 ECE Technical Workshop", "DEMO SAMPLE: A practical workshop for demonstrating event visibility in the portal.", "2026-10-16", "10:00", "ECE Seminar Hall", "Workshop"],
+        ["DEMO-28 Student Orientation", "DEMO SAMPLE: Orientation session used to demonstrate upcoming college events.", "2026-10-24", "09:30", "Main Auditorium", "Orientation"]
+    ];
+    for (const [title, description, eventDate, eventTime, venue, category] of events) {
+        await postgres.run(`
+            INSERT INTO events (title, description, event_date, event_time, venue, category, audience, published, created_at)
+            SELECT ?, ?, ?, ?, ?, ?, 'All', TRUE, CURRENT_TIMESTAMP
+            WHERE NOT EXISTS (SELECT 1 FROM events WHERE title = ?)
+        `, [title, description, eventDate, eventTime, venue, category, title]);
+    }
+
+    const announcements = [
+        ["DEMO-28 Academic Calendar Notice", "DEMO SAMPLE: Academic calendar information for portal demonstration.", "Academic"],
+        ["DEMO-28 Student Activity Notice", "DEMO SAMPLE: Student activity announcement for testing authorized portal visibility.", "Activities"],
+        ["DEMO-28 Examination Circular", "DEMO SAMPLE: Examination circular used for demonstrating official announcement responses.", "Examinations"]
+    ];
+    for (const [title, description, category] of announcements) {
+        await postgres.run(`
+            INSERT INTO announcements (title, description, audience, published, category, published_at, created_at)
+            SELECT ?, ?, 'All Students', TRUE, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            WHERE NOT EXISTS (SELECT 1 FROM announcements WHERE title = ?)
+        `, [title, description, category, title]);
+    }
+
+    const materials = [
+        ["DEMO-28 Digital Electronics Notes", "DEMO SAMPLE: Unit notes for ECE study-material demonstration.", "Document", "Digital Electronics", "ECE"],
+        ["DEMO-28 Signals and Systems Guide", "DEMO SAMPLE: Revision guide for ECE study-material demonstration.", "Guide", "Signals and Systems", "ECE"],
+        ["DEMO-28 Communication Systems Summary", "DEMO SAMPLE: Summary material for ECE portal testing.", "Summary", "Communication Systems", "ECE"]
+    ];
+    for (const [title, description, materialType, subject, department] of materials) {
+        await postgres.run(`
+            INSERT INTO study_materials (title, description, material_type, file_url, subject, department, year, section, created_at)
+            SELECT ?, ?, ?, NULL, ?, ?, NULL, NULL, CURRENT_TIMESTAMP
+            WHERE NOT EXISTS (SELECT 1 FROM study_materials WHERE title = ?)
+        `, [title, description, materialType, subject, department, title]);
+    }
+
+    const documents = [
+        ["DEMO-28 Academic Calendar", "Academic Calendar", "/demo-documents/demo-28-academic-calendar.txt"],
+        ["DEMO-28 Student Handbook", "Student Handbook", "/demo-documents/demo-28-student-handbook.txt"]
+    ];
+    for (const [title, category, fileUrl] of documents) {
+        await postgres.run(`
+            INSERT INTO documents (document_name, document_type, file_url, title, category, visibility, created_at)
+            SELECT ?, ?, ?, ?, ?, 'Public', CURRENT_TIMESTAMP
+            WHERE NOT EXISTS (SELECT 1 FROM documents WHERE title = ?)
+        `, [title, category, fileUrl, title, category, title]);
+        await postgres.run(`
+            UPDATE documents
+            SET document_type = ?, file_url = ?, category = ?, visibility = 'Public'
+            WHERE title = ? AND title LIKE 'DEMO-28%'
+        `, [category, fileUrl, category, title]);
+    }
+}
+
+async function ensureDevelopmentParentFixture() {
+    if (isProduction) return;
+
+    const fixtureParent = await parentFamily.insertOrGetParentAsync({
+        fullName: "Development Parent Fixture",
+        mobile: "9000099991",
+        email: "dev-parent-fixture@example.invalid"
+    });
+    if (!fixtureParent) return;
+
+    const students = parentFamily.isPostgresConfigured()
+        ? await postgres.all("SELECT id FROM students ORDER BY id LIMIT 2")
+        : db.prepare("SELECT id FROM students ORDER BY id LIMIT 2").all();
+
+    if (students.length < 2) return;
+    await parentFamily.ensureParentLinkAsync(fixtureParent.id, students[0].id, "Father", 1);
+    await parentFamily.ensureParentLinkAsync(fixtureParent.id, students[1].id, "Mother", 1);
+}
+
 async function ensureDemoData() {
+    const userColumns = new Set(db.prepare("PRAGMA table_info(users)").all().map((column) => column.name));
+    if (!userColumns.has("management_role")) {
+        db.exec("ALTER TABLE users ADD COLUMN management_role TEXT");
+    }
+
     const departments = [
         ["CSE", "Computer Science and Engineering"],
         ["ECE", "Electronics and Communication Engineering"],
@@ -967,6 +1368,49 @@ async function ensureDemoData() {
             `998870${String(1000 + index).slice(-4)}`
         );
     });
+
+    if (!isProduction && !parentFamily.isPostgresConfigured()) {
+        const managementPassword = process.env.MANAGEMENT_TEST_PASSWORD;
+        if (!managementPassword) return;
+        const managementFixtures = [
+            ["dev-assistant-hod-ece", "assistant_hod", "ECE"],
+            ["dev-associate-hod-ece", "associate_hod", "ECE"],
+            ["dev-hod-ece", "hod", "ECE"],
+            ["dev-ao", "ao", "CSE"],
+            ["dev-principal", "principal", "CSE"],
+            ["dev-director", "director", "CSE"],
+            ["dev-admin", "admin", null],
+            ["dev-superadmin", "superadmin", null]
+        ];
+        const managementPasswordHash = await bcrypt.hash(managementPassword, 10);
+        const insertManagementUser = db.prepare(`
+            INSERT OR IGNORE INTO users (username, password, role)
+            VALUES (?, ?, ?)
+        `);
+        const updateManagementUser = db.prepare("UPDATE users SET password = ?, role = ?, management_role = ? WHERE username = ?");
+        for (const [username, role, departmentCode] of managementFixtures) {
+            const storedRole = ["assistant_hod", "associate_hod", "ao", "principal", "director"].includes(role)
+                ? "faculty"
+                : role;
+            insertManagementUser.run(username, managementPasswordHash, storedRole);
+            updateManagementUser.run(managementPasswordHash, storedRole, role, username);
+
+            const user = db.prepare("SELECT id, role, management_role FROM users WHERE username = ?").get(username);
+            if (!user) continue;
+
+            if (departmentCode) {
+                const department = db.prepare("SELECT id FROM departments WHERE code = ?").get(departmentCode);
+                if (department) {
+                    await departmentHierarchy.upsertUserDepartmentAsync(user.id, department.id, role, role, 1, null, null);
+                }
+            } else {
+                const roleScope = departmentHierarchy.getRoleScope(role);
+                if (roleScope === "SYSTEM") {
+                    db.prepare("DELETE FROM user_departments WHERE user_id = ?").run(user.id);
+                }
+            }
+        }
+    }
 
     const subjectRows = [
         ["Data Structures", "CSE-201", "CSE", 2], ["Database Systems", "CSE-202", "CSE", 2],
@@ -1077,6 +1521,38 @@ async function ensureDemoData() {
             VALUES (?, ?, ?, '2026-27', 'Pending')
         `).run(students[0].id, busRow.id, stop.id);
     }
+}
+
+async function ensureManagementDepartmentMembership(user, requestedRole) {
+    if (!user || !user.id) return null;
+
+    const roleName = String(user.management_role || user.role || requestedRole || "").toLowerCase();
+    const memberships = await departmentHierarchy.getUserDepartmentMembershipsAsync(user.id);
+    if (memberships.length) {
+        return memberships[0];
+    }
+
+    const username = String(user.username || "");
+    const departmentToken = username.split(/[-_]/).filter(Boolean).slice(-1)[0] || "";
+    const fallbackDepartment = departmentToken
+        ? await departmentHierarchy.resolveDepartmentByNameOrCode(departmentToken.toUpperCase())
+        : null;
+
+    if (!fallbackDepartment || !["assistant_hod", "associate_hod", "hod", "ao", "principal", "director"].includes(roleName)) {
+        return null;
+    }
+
+    const runtimeUserId = parentFamily.isPostgresConfigured()
+        ? Number((await postgres.get("SELECT id FROM users WHERE username = ?", [username]))?.id || 0)
+        : Number(user.id || 0);
+
+    if (!runtimeUserId) {
+        return null;
+    }
+
+    await departmentHierarchy.upsertUserDepartmentAsync(runtimeUserId, fallbackDepartment.id, roleName, roleName, 1, null, null);
+    const repairedMemberships = await departmentHierarchy.getUserDepartmentMembershipsAsync(runtimeUserId);
+    return repairedMemberships[0] || null;
 }
 
 function generateToken(user) {
@@ -1221,7 +1697,61 @@ function requireStudent(req, res, next) {
 // ADMIN AUTH MIDDLEWARE
 // ============================================================
 
-function requireAdmin(req, res, next) {
+function getAdminRoutePermission(req) {
+    const path = req.path || "";
+    const method = String(req.method || "GET").toUpperCase();
+    const resourcePermissions = [
+        ["/uploads", "documents.upload"],
+        ["/students", method === "GET" ? "students.view" : "students.manage"],
+        ["/faculty", method === "GET" ? "faculty.view" : "faculty.manage"],
+        ["/fees", method === "GET" ? "fees.view" : "fees.manage"],
+        ["/buses", method === "GET" ? "bus.view" : "bus.manage"],
+        ["/events", method === "GET" ? "events.view" : "events.manage"],
+        ["/announcements", "announcements.manage"],
+        ["/stats", "reports.view"],
+        ["/results", method === "GET" ? "results.view" : "results.manage"],
+        ["/attendance", method === "GET" ? "attendance.view" : "attendance.manage"],
+        ["/assignments", method === "GET" ? "assignments.view" : "assignments.create"],
+        ["/documents", method === "GET" ? "documents.view" : "documents.manage"],
+        ["/materials", method === "GET" ? "study_materials.view" : "study_materials.manage"],
+        ["/leave-requests", method === "GET" ? "leave.view" : "leave.approve"],
+        ["/reports/export", "reports.export"],
+        ["/reports", "reports.view"],
+        ["/notifications", method === "GET" ? "notifications.view" : "notifications.manage"],
+        ["/settings", method === "GET" ? "settings.view" : "settings.manage"],
+        ["/users", method === "GET" ? "users.view" : "users.manage"],
+        ["/roles", "roles.manage"],
+        ["/system", "system.manage"],
+        ["/audit", "audit.view"]
+    ];
+    const match = resourcePermissions.find(([prefix]) => path.startsWith(`/api/admin${prefix}`));
+    const departmentPermissions = {
+        students: "department.student.read",
+        faculty: "department.faculty.read",
+        results: "department.results.read"
+    };
+    const role = String(req.user?.role || "").toLowerCase();
+    if (["faculty", "assistant_hod", "associate_hod", "hod"].includes(role)) {
+        const departmentMatch = Object.entries(departmentPermissions).find(([resource]) => path.startsWith(`/api/admin/${resource}`));
+        if (departmentMatch) return departmentMatch[1];
+        return null;
+    }
+    return match ? match[1] : null;
+}
+
+function requirePermission(permission) {
+    return function permissionMiddleware(req, res, next) {
+        if (!req.user) {
+            return res.status(401).json({ status: "error", message: "Authentication required" });
+        }
+        if (!departmentHierarchy.hasRolePermission(req.user, permission)) {
+            return res.status(403).json({ status: "error", message: "Permission denied" });
+        }
+        next();
+    };
+}
+
+async function requireAdmin(req, res, next) {
 
     if (!req.user) {
 
@@ -1232,16 +1762,42 @@ function requireAdmin(req, res, next) {
 
     }
 
-    if (
-        req.user.role !== "admin" &&
-        req.user.role !== "superadmin"
-    ) {
+    const managementRoles = ["faculty", "assistant_hod", "associate_hod", "hod", "ao", "principal", "director"];
+    if (!managementRoles.includes(req.user.role) && req.user.role !== "admin" && req.user.role !== "superadmin") {
 
         return res.status(403).json({
             status: "error",
             message: "Admin access required"
         });
 
+    }
+
+    const requiredPermission = getAdminRoutePermission(req);
+    if (!requiredPermission) {
+        return res.status(403).json({ status: "error", message: "Endpoint permission is not configured" });
+    }
+    if (!departmentHierarchy.hasRolePermission(req.user, requiredPermission)) {
+        return res.status(403).json({ status: "error", message: "Permission denied" });
+    }
+
+    if (String(req.user.scope || departmentHierarchy.getRoleScope(req.user.role)).toUpperCase() === "DEPARTMENT") {
+        const requestedDepartmentId = Number(req.params.department_id || req.query.department_id || req.body?.department_id || 0);
+        const requestedDepartment = requestedDepartmentId
+            ? (parentFamily.isPostgresConfigured()
+                ? await postgres.get("SELECT * FROM departments WHERE id = ?", [requestedDepartmentId])
+                : db.prepare("SELECT * FROM departments WHERE id = ? AND active = 1").get(requestedDepartmentId))
+            : (parentFamily.isPostgresConfigured()
+                ? await postgres.get(`
+                    SELECT * FROM departments
+                    WHERE code = ? OR name = ?
+                    ORDER BY id ASC
+                    LIMIT 1
+                `, [req.query.department || req.body?.department || "", req.query.department || req.body?.department || ""])
+                : departmentHierarchy.resolveDepartmentByNameOrCode(req.query.department || req.body?.department || ""));
+        if (!requestedDepartment || !departmentHierarchy.canAccessDepartment(req.user, requestedDepartment.id, requiredPermission)) {
+            return res.status(403).json({ status: "error", message: "Department access denied" });
+        }
+        req.query.department = requestedDepartment.code;
     }
 
     next();
@@ -1273,8 +1829,27 @@ function requireParent(req, res, next) {
 
     }
 
+    if (req.user.scope && req.user.scope !== "STUDENT_LINKED") {
+        return res.status(403).json({
+            status: "error",
+            message: "Parent access scope is invalid"
+        });
+    }
+
     next();
 
+}
+
+function requireParentScope(req, res, next) {
+    if (!req.user) {
+        return res.status(401).json({ status: "error", message: "Authentication required" });
+    }
+
+    if (req.user.role !== "parent" || (req.user.scope && req.user.scope !== "STUDENT_LINKED")) {
+        return res.status(403).json({ status: "error", message: "Linked student scope required" });
+    }
+
+    next();
 }
 
 function requireFaculty(req, res, next) {
@@ -1296,6 +1871,180 @@ function requireFaculty(req, res, next) {
     next();
 }
 
+function requireDepartmentAccess(requiredPermission = null) {
+    return function departmentAccessMiddleware(req, res, next) {
+        if (!req.user) {
+            return res.status(401).json({ status: "error", message: "Authentication required" });
+        }
+
+        if (req.user.role === "admin" || req.user.role === "superadmin") {
+            return next();
+        }
+
+        const userScope = String(req.user.scope || departmentHierarchy.getRoleScope(req.user.role || "") || "").toUpperCase();
+        if (userScope === "COLLEGE_WIDE" || userScope === "SYSTEM") {
+            if (requiredPermission && !departmentHierarchy.hasRolePermission(req.user, requiredPermission)) {
+                return res.status(403).json({ status: "error", message: "Permission denied for college-wide scope" });
+            }
+            return next();
+        }
+
+        const departmentId = Number(req.params.department_id || req.query.department_id || req.body?.department_id || req.user.department_id || 0);
+        if (!departmentId) {
+            return res.status(403).json({ status: "error", message: "Department context is required" });
+        }
+
+        const userRole = String(req.user.role || "").toLowerCase();
+        const allowed = departmentHierarchy.canAccessDepartment({ ...req.user, role: userRole }, departmentId, requiredPermission);
+
+        if (!allowed) {
+            return res.status(403).json({ status: "error", message: "Department access denied" });
+        }
+
+        next();
+    };
+}
+
+function requireManagementAccess({ departmentPermission = null, collegePermission = null, roles = null } = {}) {
+    return function managementAccessMiddleware(req, res, next) {
+        if (!req.user) {
+            return res.status(401).json({ status: "error", message: "Authentication required" });
+        }
+
+        const managementRoles = roles || ["faculty", "assistant_hod", "associate_hod", "hod", "ao", "principal", "director", "admin", "superadmin"];
+        if (!managementRoles.includes(String(req.user.role || "").toLowerCase())) {
+            return res.status(403).json({ status: "error", message: "Management access required" });
+        }
+
+        const scope = String(req.user.scope || departmentHierarchy.getRoleScope(req.user.role) || "").toUpperCase();
+        const permission = scope === "DEPARTMENT" ? departmentPermission : collegePermission;
+        if (permission && !departmentHierarchy.hasRolePermission(req.user, permission)) {
+            return res.status(403).json({ status: "error", message: "Permission denied" });
+        }
+
+        if (scope === "DEPARTMENT") {
+            const requestedDepartmentId = Number(req.params.department_id || req.query.department_id || req.body?.department_id || req.user.department_id || 0);
+            if (parentFamily.isPostgresConfigured()) {
+                if (!requestedDepartmentId || Number(req.user.department_id) !== requestedDepartmentId) {
+                    return res.status(403).json({ status: "error", message: "Department access denied" });
+                }
+                req.managementDepartmentId = requestedDepartmentId;
+                return next();
+            }
+            if (!requestedDepartmentId || !departmentHierarchy.canAccessDepartment(req.user, requestedDepartmentId, permission)) {
+                return res.status(403).json({ status: "error", message: "Department access denied" });
+            }
+            req.managementDepartmentId = requestedDepartmentId;
+        } else if (!["COLLEGE_WIDE", "SYSTEM"].includes(scope)) {
+            return res.status(403).json({ status: "error", message: "Management scope is invalid" });
+        }
+
+        next();
+    };
+}
+
+function getManagementDepartment(req) {
+    if (parentFamily.isPostgresConfigured() && req.user?.department_id) {
+        return {
+            id: req.user.department_id,
+            code: req.user.department_code,
+            name: req.user.department_name
+        };
+    }
+    if (req.managementDepartmentId) {
+        return db.prepare("SELECT * FROM departments WHERE id = ? AND active = 1").get(req.managementDepartmentId);
+    }
+    return null;
+}
+
+const khitAiService = createKhitAiService({
+    db,
+    postgres,
+    parentFamily,
+    departmentHierarchy
+});
+
+async function recordKhitAiAudit(userId, intent, success) {
+    if (!userId) return;
+    const metadata = JSON.stringify({ intent: intent || "unknown", success: Boolean(success) });
+    try {
+        if (parentFamily.isPostgresConfigured()) {
+            await postgres.run(`
+                INSERT INTO audit_logs (user_id, action, entity_type, metadata)
+                VALUES (?, ?, ?, ?)
+            `, [userId, "KHIT_AI_QUERY", "khit_ai", metadata]);
+        } else {
+            db.prepare(`
+                INSERT INTO audit_logs (user_id, action, entity_type, metadata)
+                VALUES (?, ?, ?, ?)
+            `).run(userId, "KHIT_AI_QUERY", "khit_ai", metadata);
+        }
+    } catch (error) {
+        console.error("KHIT AI audit error:", error.message);
+    }
+}
+
+app.post(
+    "/api/khit-ai/chat",
+    authenticateToken,
+    async (req, res) => {
+        const payload = req.body && typeof req.body === "object" ? req.body : {};
+        const rawMessage = String(payload.message || "").trim();
+        if (rawMessage.length > 1000) {
+            return res.status(400).json({
+                success: false,
+                status: "error",
+                message: "Question is too long. Please keep it under 1000 characters."
+            });
+        }
+        const message = khitAiService.normalizeMessage(rawMessage);
+        const requestedStudentId = payload.student_id;
+
+        if (!message) {
+            return res.status(400).json({
+                success: false,
+                status: "error",
+                message: "A question is required."
+            });
+        }
+
+        try {
+            const result = await khitAiService.handle({
+                user: req.user,
+                message,
+                studentId: requestedStudentId
+            });
+            const success = !result.error;
+            await recordKhitAiAudit(req.user.id, result.intent, success);
+
+            if (result.error) {
+                return res.status(result.status || 403).json({
+                    success: false,
+                    status: "error",
+                    intent: result.intent || "unknown",
+                    message: result.error
+                });
+            }
+
+            return res.json({
+                success: true,
+                status: "success",
+                intent: result.intent || "unknown",
+                message: result.message,
+                data: result.data || null
+            });
+        } catch (error) {
+            await recordKhitAiAudit(req.user.id, "unknown", false);
+            console.error("KHIT AI request error:", error.message);
+            return res.status(500).json({
+                success: false,
+                status: "error",
+                message: "KHIT AI is temporarily unavailable."
+            });
+        }
+    }
+);
+
 
 // ============================================================
 // ADMIN FILE UPLOADS
@@ -1306,7 +2055,7 @@ app.post(
     authenticateToken,
     requireAdmin,
     (req, res) => {
-        upload.single("file")(req, res, error => {
+        upload.single("file")(req, res, async error => {
 
             if (error) {
                 return res.status(400).json({
@@ -1324,12 +2073,18 @@ app.post(
                 });
             }
 
-            const fileUrl = `/uploads/${req.file.filename}`;
+            const storedFile = await storage.uploadFile(
+                req.file.path,
+                usesObjectStorage ? `uploads/${req.file.filename}` : req.file.filename,
+                req.file.mimetype
+            );
+            if (usesObjectStorage) fs.unlinkSync(req.file.path);
+            const fileUrl = storedFile.url;
 
-            db.prepare(`
+            await runtimeRun(`
                 INSERT INTO audit_logs (user_id, action, entity_type, metadata)
                 VALUES (?, ?, ?, ?)
-            `).run(
+            `, [
                 req.user.id,
                 "UPLOAD",
                 "file",
@@ -1339,7 +2094,7 @@ app.post(
                     size: req.file.size,
                     mimeType: req.file.mimetype
                 })
-            );
+            ]);
 
             return res.status(201).json({
                 status: "success",
@@ -1360,7 +2115,7 @@ app.get(
     "/api/admin/documents",
     authenticateToken,
     requireAdmin,
-    (req, res) => {
+    async (req, res) => {
 
         try {
             const { page, limit, offset } = getPagination(req);
@@ -1370,7 +2125,7 @@ app.get(
                 : "";
             const searchParams = search ? [`%${search}%`, `%${search}%`] : [];
 
-            const documents = db.prepare(`
+            const documents = await runtimeAll(`
                 SELECT
                     d.*,
                     u.username,
@@ -1383,10 +2138,10 @@ app.get(
                 ${where}
                 ORDER BY d.created_at DESC, d.id DESC
                 LIMIT ? OFFSET ?
-            `).all(...searchParams, limit, offset);
-            const total = db.prepare(`
+            `, [...searchParams, limit, offset]);
+            const total = await runtimeGet(`
                 SELECT COUNT(*) AS total FROM documents d ${where}
-            `).get(...searchParams).total;
+            `, searchParams);
 
             return res.json({
                 status: "success",
@@ -1400,7 +2155,7 @@ app.get(
 
             return res.status(500).json({
                 status: "error",
-                message: error.message
+                message: "Unable to load documents"
             });
 
         }
@@ -1412,7 +2167,7 @@ app.post(
     authenticateToken,
     requireAdmin,
     (req, res) => {
-        upload.single("file")(req, res, error => {
+        upload.single("file")(req, res, async error => {
 
             if (error) {
                 return res.status(400).json({
@@ -1428,7 +2183,7 @@ app.post(
             const requestedStudentId = req.body.student_id ? Number(req.body.student_id) : null;
             const requestedUserId = req.body.user_id ? Number(req.body.user_id) : null;
             const studentId = requestedStudentId || (requestedUserId
-                ? (db.prepare("SELECT id FROM students WHERE user_id = ?").get(requestedUserId) || {}).id
+                ? (await runtimeGet("SELECT id FROM students WHERE user_id = ?", [requestedUserId]) || {}).id
                 : null);
             const visibility = String(req.body.visibility || "Private").trim() === "Public"
                 ? "Public"
@@ -1442,7 +2197,7 @@ app.post(
             }
 
             if (studentId) {
-                const student = db.prepare("SELECT id FROM students WHERE id = ?").get(studentId);
+                const student = await runtimeGet("SELECT id FROM students WHERE id = ?", [studentId]);
                 if (!student) {
                     fs.unlinkSync(req.file.path);
                     return res.status(404).json({
@@ -1454,37 +2209,47 @@ app.post(
 
             try {
 
-                const fileUrl = `/uploads/${req.file.filename}`;
-                const result = db.prepare(`
+                const storedFile = await storage.uploadFile(
+                    req.file.path,
+                    usesObjectStorage ? `documents/${req.file.filename}` : req.file.filename,
+                    req.file.mimetype
+                );
+                const fileUrl = storedFile.url;
+                const result = await runtimeRun(`
                     INSERT INTO documents
                         (student_id, title, category, file_path, uploaded_by, visibility, created_at)
                     VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-                `).run(studentId, documentName, documentType, fileUrl, req.user.id, visibility);
+                    RETURNING id
+                `, [studentId, documentName, documentType, fileUrl, req.user.id, visibility]);
 
-                db.prepare(`
+                await runtimeRun(`
                     INSERT INTO audit_logs (user_id, action, entity_type, entity_id, metadata)
                     VALUES (?, ?, ?, ?, ?)
-                `).run(
+                `, [
                     req.user.id,
                     "UPLOAD",
                     "document",
                     result.lastInsertRowid,
-                    JSON.stringify({ documentName, documentType, studentId, visibility, fileUrl })
-                );
+                    JSON.stringify({ documentName, documentType, studentId, visibility, fileUrl, storageKey: storedFile.key })
+                ]);
+
+                if (usesObjectStorage) fs.unlinkSync(req.file.path);
+
+                const documentId = result.lastInsertRowid ?? result.rows?.[0]?.id;
 
                 return res.status(201).json({
                     status: "success",
                     message: "Document uploaded",
-                    document_id: result.lastInsertRowid,
+                    document_id: documentId,
                     file_url: fileUrl
                 });
 
             } catch (databaseError) {
-                fs.unlinkSync(req.file.path);
+                if (req.file?.path && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
                 console.error("Admin document save error:", databaseError);
                 return res.status(500).json({
                     status: "error",
-                    message: databaseError.message
+                    message: "Unable to save document"
                 });
             }
         });
@@ -1495,25 +2260,23 @@ app.delete(
     "/api/admin/documents/:id",
     authenticateToken,
     requireAdmin,
-    (req, res) => {
+    async (req, res) => {
         try {
             const documentId = Number(req.params.id);
-            const document = db.prepare(`
+            const document = await runtimeGet(`
                 SELECT file_path
                 FROM documents
                 WHERE id = ?
-            `).get(documentId);
+            `, [documentId]);
 
             if (!document) {
                 return res.status(404).json({ status: "error", message: "Document not found" });
             }
 
-            const result = db.prepare("DELETE FROM documents WHERE id = ?").run(documentId);
+            const result = await runtimeRun("DELETE FROM documents WHERE id = ?", [documentId]);
             if (result.changes && document.file_path) {
-                const filePath = path.join(__dirname, document.file_path.replace(/^\/+/, ""));
-                if (filePath.startsWith(uploadDirectory) && fs.existsSync(filePath)) {
-                    fs.unlinkSync(filePath);
-                }
+                if (usesObjectStorage) await storage.deleteObject(document.file_path.replace(/^\/api\/files\//, ""));
+                else storage.deleteObject(document.file_path);
             }
 
             return res.json({ status: "success", message: "Document deleted" });
@@ -1524,6 +2287,40 @@ app.delete(
     }
 );
 
+app.get(/^\/api\/files\/(.+)$/, authenticateToken, async (req, res) => {
+    try {
+        const requestedKey = decodeURIComponent(req.params[0] || "");
+        if (!requestedKey || requestedKey.includes("..")) return res.status(404).json({ status: "error", message: "File not found" });
+        const document = await runtimeGet(`
+            SELECT d.id, d.file_path, d.visibility, d.student_id, d.uploaded_by,
+                   s.user_id AS student_user_id
+            FROM documents d
+            LEFT JOIN students s ON s.id = d.student_id
+            WHERE d.file_path = ? OR d.file_path = ?
+            LIMIT 1
+        `, [`/api/files/${requestedKey}`, `/uploads/${requestedKey}`]);
+        if (!document && requestedKey.startsWith("uploads/") && ["admin", "superadmin"].includes(String(req.user.role || "").toLowerCase())) {
+            const servedUpload = await storage.getDownloadResponse(requestedKey, res);
+            return servedUpload ? undefined : res.status(404).json({ status: "error", message: "File not found" });
+        }
+        if (!document) return res.status(404).json({ status: "error", message: "File not found" });
+
+        const role = String(req.user.role || "").toLowerCase();
+        const allowed = document.visibility === "Public"
+            || ["admin", "superadmin"].includes(role)
+            || Number(document.uploaded_by) === Number(req.user.id)
+            || (role === "student" && Number(document.student_user_id) === Number(req.user.id))
+            || (role === "parent" && await parentFamily.isStudentLinkedToParentAsync(req.user.parent_id || req.user.id, document.student_id));
+        if (!allowed) return res.status(403).json({ status: "error", message: "File access denied" });
+
+        const served = await storage.getDownloadResponse(requestedKey, res);
+        if (!served) return res.status(404).json({ status: "error", message: "File not found" });
+    } catch (error) {
+        console.error("File download error:", error.message);
+        return res.status(500).json({ status: "error", message: "Unable to download file" });
+    }
+});
+
 // ============================================================
 // APP SETTINGS
 // ============================================================
@@ -1532,13 +2329,13 @@ app.get(
     "/api/admin/settings",
     authenticateToken,
     requireAdmin,
-    (req, res) => {
+    async (req, res) => {
         try {
-            const rows = db.prepare(`
+            const rows = await runtimeAll(`
                 SELECT setting_key, setting_value, description, updated_at
                 FROM app_settings
                 ORDER BY setting_key ASC
-            `).all();
+            `);
 
             const settings = {};
             rows.forEach((row) => {
@@ -1555,7 +2352,7 @@ app.get(
             console.error("Admin settings load error:", error);
             return res.status(500).json({
                 status: "error",
-                message: error.message
+                message: "Unable to load settings"
             });
         }
     }
@@ -1565,7 +2362,7 @@ app.put(
     "/api/admin/settings",
     authenticateToken,
     requireAdmin,
-    (req, res) => {
+    async (req, res) => {
         try {
             const updates = req.body || {};
             if (!updates || typeof updates !== "object" || Array.isArray(updates)) {
@@ -1600,39 +2397,48 @@ app.put(
                 });
             }
 
-            const stmt = db.prepare(`
-                INSERT INTO app_settings (setting_key, setting_value, updated_by, updated_at)
-                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-                ON CONFLICT(setting_key) DO UPDATE SET
-                    setting_value = excluded.setting_value,
-                    updated_by = excluded.updated_by,
-                    updated_at = CURRENT_TIMESTAMP
-            `);
+            await (usePostgresRuntime
+                ? postgres.transaction(async transaction => {
+                    for (const { key, value } of rowsToUpdate) {
+                        await transaction.run(`
+                            INSERT INTO app_settings (setting_key, setting_value, updated_by, updated_at)
+                            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                            ON CONFLICT(setting_key) DO UPDATE SET
+                                setting_value = EXCLUDED.setting_value,
+                                updated_by = EXCLUDED.updated_by,
+                                updated_at = CURRENT_TIMESTAMP
+                        `, [key, value, req.user.id]);
+                    }
+                })
+                : Promise.all(rowsToUpdate.map(({ key, value }) => runtimeRun(`
+                    INSERT INTO app_settings (setting_key, setting_value, updated_by, updated_at)
+                    VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(setting_key) DO UPDATE SET
+                        setting_value = excluded.setting_value,
+                        updated_by = excluded.updated_by,
+                        updated_at = CURRENT_TIMESTAMP
+                `, [key, value, req.user.id]))));
 
-            rowsToUpdate.forEach(({ key, value }) => {
-                stmt.run(key, value, req.user.id);
-            });
-
-            const updatedSettings = db.prepare(`
+            const updatedSettings = await runtimeAll(`
                 SELECT setting_key, setting_value
                 FROM app_settings
                 WHERE setting_key IN (${rowsToUpdate.map(() => "?").join(", ")})
-            `).all(...rowsToUpdate.map(({ key }) => key));
+            `, rowsToUpdate.map(({ key }) => key));
 
             const responseSettings = {};
             updatedSettings.forEach((row) => {
                 responseSettings[row.setting_key] = row.setting_value === "true";
             });
 
-            db.prepare(`
+            await runtimeRun(`
                 INSERT INTO audit_logs (user_id, action, entity_type, metadata)
                 VALUES (?, ?, ?, ?)
-            `).run(
+            `, [
                 req.user.id,
                 "UPDATE_SETTINGS",
                 "app_settings",
                 JSON.stringify({ updates: responseSettings })
-            );
+            ]);
 
             return res.json({
                 status: "success",
@@ -1644,7 +2450,7 @@ app.put(
             console.error("Admin settings update error:", error);
             return res.status(500).json({
                 status: "error",
-                message: error.message
+                message: "Unable to update settings"
             });
         }
     }
@@ -1675,8 +2481,28 @@ app.get("/api/status", (req, res) => {
 
 });
 
+app.get("/api/health", async (req, res) => {
+    try {
+        if (parentFamily.isPostgresConfigured()) {
+            await postgres.get("SELECT 1 AS ok");
+        } else {
+            db.prepare("SELECT 1 AS ok").get();
+        }
+        return res.json({ status: "ok", database: "ready" });
+    } catch (error) {
+        console.error("Health check failed:", error);
+        return res.status(503).json({ status: "error", database: "unavailable" });
+    }
+});
+
 app.get("/api/demo-credentials", async (req, res) => {
     try {
+        if (isProduction) {
+            return res.status(404).json({
+                status: "error",
+                message: "Demo credentials are unavailable in production"
+            });
+        }
         await ensureDemoAccounts();
 
         return res.json({
@@ -1701,6 +2527,23 @@ app.get("/api/demo-credentials", async (req, res) => {
                     student_id: "STU-1001",
                     parent_mobile: "9876500001",
                     parent_email: "parent@khit.edu.in"
+                },
+                management: isProduction ? null : {
+                    password_source: "MANAGEMENT_TEST_PASSWORD",
+                    department_roles: {
+                        assistant_hod: "dev-assistant-hod-ece",
+                        associate_hod: "dev-associate-hod-ece",
+                        hod: "dev-hod-ece"
+                    },
+                    college_roles: {
+                        ao: "dev-ao",
+                        principal: "dev-principal",
+                        director: "dev-director"
+                    },
+                    administration: {
+                        admin: "dev-admin",
+                        superadmin: "dev-superadmin"
+                    }
                 }
             }
         });
@@ -1720,14 +2563,14 @@ app.get("/api/demo-credentials", async (req, res) => {
 
 app.post("/api/password-reset/request", async (req, res) => {
     try {
-        const username = String(req.body.username || "").trim();
-        const email = String(req.body.email || "").trim().toLowerCase();
+        const username = safeString(req.body.username).slice(0, 80);
+        const email = safeString(req.body.email).toLowerCase();
         const transport = getMailTransport();
 
-        if (!username || !email) {
+        if (!username || !email || !isValidEmail(email)) {
             return res.status(400).json({
                 status: "error",
-                message: "Username and registered email are required"
+                message: "Username and a valid registered email are required"
             });
         }
 
@@ -1738,12 +2581,12 @@ app.post("/api/password-reset/request", async (req, res) => {
             });
         }
 
-        const user = db.prepare(`
+        const user = await postgres.get(`
             SELECT u.id, u.username, s.email, s.full_name
             FROM users u
             JOIN students s ON s.user_id = u.id
             WHERE u.username = ? AND u.role = 'student' AND lower(s.email) = ?
-        `).get(username, email);
+        `, [username, email]);
 
         if (!user) {
             return res.status(400).json({
@@ -1756,16 +2599,18 @@ app.post("/api/password-reset/request", async (req, res) => {
         const otpHash = await bcrypt.hash(otp, 10);
         const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
 
-        db.prepare(`
-            UPDATE password_reset_otps
-            SET used_at = CURRENT_TIMESTAMP
-            WHERE user_id = ? AND used_at IS NULL
-        `).run(user.id);
+        await postgres.transaction(async transaction => {
+            await transaction.run(`
+                UPDATE password_reset_otps
+                SET used_at = CURRENT_TIMESTAMP
+                WHERE user_id = ? AND used_at IS NULL
+            `, [user.id]);
 
-        db.prepare(`
-            INSERT INTO password_reset_otps (user_id, otp_hash, expires_at)
-            VALUES (?, ?, ?)
-        `).run(user.id, otpHash, expiresAt);
+            await transaction.run(`
+                INSERT INTO password_reset_otps (user_id, otp_hash, expires_at)
+                VALUES (?, ?, ?)
+            `, [user.id, otpHash, expiresAt]);
+        });
 
         await transport.sendMail({
             from: process.env.SMTP_FROM || process.env.SMTP_USER,
@@ -1790,32 +2635,32 @@ app.post("/api/password-reset/request", async (req, res) => {
 
 app.post("/api/password-reset/confirm", async (req, res) => {
     try {
-        const username = String(req.body.username || "").trim();
-        const email = String(req.body.email || "").trim().toLowerCase();
-        const otp = String(req.body.otp || "").trim();
+        const username = safeString(req.body.username).slice(0, 80);
+        const email = safeString(req.body.email).toLowerCase();
+        const otp = safeString(req.body.otp).replace(/\D/g, "").slice(0, 6);
         const newPassword = String(req.body.newPassword || "");
 
-        if (!username || !email || !otp || newPassword.length < 8) {
+        if (!username || !email || !isValidEmail(email) || !otp || otp.length !== 6 || newPassword.length < 8) {
             return res.status(400).json({
                 status: "error",
-                message: "Username, email, OTP, and an 8-character password are required"
+                message: "Username, valid email, 6-digit OTP, and an 8-character password are required"
             });
         }
 
-        const user = db.prepare(`
+        const user = await postgres.get(`
             SELECT u.id
             FROM users u
             JOIN students s ON s.user_id = u.id
             WHERE u.username = ? AND u.role = 'student' AND lower(s.email) = ?
-        `).get(username, email);
+        `, [username, email]);
 
-        const reset = user && db.prepare(`
+        const reset = user && await postgres.get(`
             SELECT *
             FROM password_reset_otps
             WHERE user_id = ? AND used_at IS NULL
             ORDER BY id DESC
             LIMIT 1
-        `).get(user.id);
+        `, [user.id]);
 
         if (!reset || new Date(reset.expires_at).getTime() < Date.now()) {
             return res.status(400).json({
@@ -1832,8 +2677,10 @@ app.post("/api/password-reset/confirm", async (req, res) => {
         }
 
         const passwordHash = await bcrypt.hash(newPassword, 10);
-        db.prepare("UPDATE users SET password = ? WHERE id = ?").run(passwordHash, user.id);
-        db.prepare("UPDATE password_reset_otps SET used_at = CURRENT_TIMESTAMP WHERE id = ?").run(reset.id);
+        await postgres.transaction(async transaction => {
+            await transaction.run("UPDATE users SET password = ? WHERE id = ?", [passwordHash, user.id]);
+            await transaction.run("UPDATE password_reset_otps SET used_at = CURRENT_TIMESTAMP WHERE id = ?", [reset.id]);
+        });
 
         return res.json({
             status: "success",
@@ -1851,24 +2698,24 @@ app.post("/api/password-reset/confirm", async (req, res) => {
 
 app.post("/api/admin-password-reset/request", async (req, res) => {
     try {
-        const username = String(req.body.username || "").trim();
-        const email = String(req.body.email || "").trim().toLowerCase();
+        const username = safeString(req.body.username).slice(0, 80);
+        const email = safeString(req.body.email).toLowerCase();
         const configuredEmail = String(process.env.ADMIN_RESET_EMAIL || "").trim().toLowerCase();
         const transport = getMailTransport();
 
-        if (!username || !email) {
-            return res.status(400).json({ status: "error", message: "Admin username and reset email are required" });
+        if (!username || !email || !isValidEmail(email)) {
+            return res.status(400).json({ status: "error", message: "Admin username and a valid reset email are required" });
         }
 
         if (!transport || !configuredEmail) {
             return res.status(503).json({ status: "error", message: "Admin password reset email is not configured yet" });
         }
 
-        const user = db.prepare(`
+        const user = await postgres.get(`
             SELECT id, username
             FROM users
             WHERE username = ? AND role IN ('admin', 'superadmin')
-        `).get(username);
+        `, [username]);
 
         if (!user || email !== configuredEmail) {
             return res.status(400).json({ status: "error", message: "Admin username and reset email do not match" });
@@ -1878,15 +2725,17 @@ app.post("/api/admin-password-reset/request", async (req, res) => {
         const otpHash = await bcrypt.hash(otp, 10);
         const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
 
-        db.prepare(`
-            UPDATE password_reset_otps
-            SET used_at = CURRENT_TIMESTAMP
-            WHERE user_id = ? AND used_at IS NULL
-        `).run(user.id);
-        db.prepare(`
-            INSERT INTO password_reset_otps (user_id, otp_hash, expires_at)
-            VALUES (?, ?, ?)
-        `).run(user.id, otpHash, expiresAt);
+        await postgres.transaction(async transaction => {
+            await transaction.run(`
+                UPDATE password_reset_otps
+                SET used_at = CURRENT_TIMESTAMP
+                WHERE user_id = ? AND used_at IS NULL
+            `, [user.id]);
+            await transaction.run(`
+                INSERT INTO password_reset_otps (user_id, otp_hash, expires_at)
+                VALUES (?, ?, ?)
+            `, [user.id, otpHash, expiresAt]);
+        });
 
         await transport.sendMail({
             from: process.env.SMTP_FROM || process.env.SMTP_USER,
@@ -1905,34 +2754,36 @@ app.post("/api/admin-password-reset/request", async (req, res) => {
 
 app.post("/api/admin-password-reset/confirm", async (req, res) => {
     try {
-        const username = String(req.body.username || "").trim();
-        const email = String(req.body.email || "").trim().toLowerCase();
-        const otp = String(req.body.otp || "").trim();
+        const username = safeString(req.body.username).slice(0, 80);
+        const email = safeString(req.body.email).toLowerCase();
+        const otp = safeString(req.body.otp).replace(/\D/g, "").slice(0, 6);
         const newPassword = String(req.body.newPassword || "");
         const configuredEmail = String(process.env.ADMIN_RESET_EMAIL || "").trim().toLowerCase();
 
-        if (!username || email !== configuredEmail || !otp || newPassword.length < 8) {
-            return res.status(400).json({ status: "error", message: "Valid admin email, OTP, and an 8-character password are required" });
+        if (!username || email !== configuredEmail || !otp || otp.length !== 6 || newPassword.length < 8) {
+            return res.status(400).json({ status: "error", message: "Valid admin email, 6-digit OTP, and an 8-character password are required" });
         }
 
-        const user = db.prepare(`
+        const user = await postgres.get(`
             SELECT id
             FROM users
             WHERE username = ? AND role IN ('admin', 'superadmin')
-        `).get(username);
-        const reset = user && db.prepare(`
+        `, [username]);
+        const reset = user && await postgres.get(`
             SELECT * FROM password_reset_otps
             WHERE user_id = ? AND used_at IS NULL
             ORDER BY id DESC LIMIT 1
-        `).get(user.id);
+        `, [user.id]);
 
         if (!reset || new Date(reset.expires_at).getTime() < Date.now() || !(await bcrypt.compare(otp, reset.otp_hash))) {
             return res.status(400).json({ status: "error", message: "OTP is invalid or expired" });
         }
 
         const passwordHash = await bcrypt.hash(newPassword, 10);
-        db.prepare("UPDATE users SET password = ? WHERE id = ?").run(passwordHash, user.id);
-        db.prepare("UPDATE password_reset_otps SET used_at = CURRENT_TIMESTAMP WHERE id = ?").run(reset.id);
+        await postgres.transaction(async transaction => {
+            await transaction.run("UPDATE users SET password = ? WHERE id = ?", [passwordHash, user.id]);
+            await transaction.run("UPDATE password_reset_otps SET used_at = CURRENT_TIMESTAMP WHERE id = ?", [reset.id]);
+        });
 
         return res.json({ status: "success", message: "Admin password reset successful. You can login now." });
     } catch (error) {
@@ -1954,73 +2805,21 @@ app.post(
                 parent_email: parentEmail
             } = req.body;
 
-            const requestedRole = String(role || "").trim().toLowerCase();
+            const requestedRole = safeString(role).trim().toLowerCase();
+            const normalizedUsername = safeString(username).slice(0, 80);
+            const normalizedPassword = String(password || "");
+            const normalizedStudentId = safeString(studentId).slice(0, 80);
+            const normalizedParentMobile = safeString(parentMobile).slice(0, 30);
+            const normalizedParentEmail = safeString(parentEmail).toLowerCase().slice(0, 255);
 
             if (requestedRole === "parent" || studentId) {
-                const normalizedStudentId = String(studentId || "").trim();
-                const normalizedMobile = parentMobile ? String(parentMobile).trim() : "";
-                const normalizedEmail = parentEmail ? String(parentEmail).trim() : "";
-
-                if (!normalizedStudentId || (!normalizedMobile && !normalizedEmail)) {
-                    return res.status(400).json({
-                        status: "error",
-                        message: "Student ID and parent mobile or email are required"
-                    });
-                }
-
-                const student = db.prepare(`
-                    SELECT *
-                    FROM students
-                    WHERE student_id = ?
-                      AND (
-                        parent_mobile = ? OR parent_email = ?
-                      )
-                `).get(
-                    normalizedStudentId,
-                    normalizedMobile || null,
-                    normalizedEmail || null
-                );
-
-                if (!student) {
-                    return res.status(401).json({
-                        status: "error",
-                        message: "Parent credentials do not match any student record"
-                    });
-                }
-
-                const token = jwt.sign(
-                    {
-                        id: student.user_id,
-                        role: "parent",
-                        parent_name: student.parent_name,
-                        student_id: student.student_id
-                    },
-                    JWT_SECRET,
-                    { expiresIn: "1d" }
-                );
-
-                return res.json({
-                    status: "success",
-                    message: "Parent login successful",
-                    token,
-                    user: {
-                        id: student.user_id,
-                        username: student.student_id,
-                        role: "parent"
-                    },
-                    student: {
-                        id: student.id,
-                        student_id: student.student_id,
-                        full_name: student.full_name,
-                        department: student.department,
-                        year: student.year,
-                        section: student.section,
-                        parent_name: student.parent_name
-                    }
+                return res.status(410).json({
+                    status: "error",
+                    message: "Parent login requires OTP verification. Use /api/parent/request-otp and /api/parent/verify-otp."
                 });
             }
 
-            if (!username || !password) {
+            if (!normalizedUsername || !normalizedPassword) {
                 return res.status(400).json({
                     status: "error",
                     message: "Username and password are required"
@@ -2028,19 +2827,27 @@ app.post(
             }
 
             if (requestedRole === "admin" || requestedRole === "superadmin") {
-                if (username !== ALLOWED_ADMIN_USERNAME) {
+                const isDevelopmentFixture = !isProduction && normalizedUsername.startsWith("dev-");
+                if (normalizedUsername !== ALLOWED_ADMIN_USERNAME && !isDevelopmentFixture) {
                     return res.status(401).json({
                         status: "error",
                         message: "Invalid admin credentials"
                     });
                 }
 
-                const user = db.prepare(`
+                let user = await postgres.get(`
                     SELECT *
                     FROM users
                     WHERE username = ?
                     AND role IN ('admin', 'superadmin')
-                `).get(username);
+                `, [normalizedUsername]);
+
+                if (!user && isDevelopmentFixture) {
+                    user = getLocalDevelopmentUser(`
+                        SELECT * FROM users
+                        WHERE username = ? AND role IN ('admin', 'superadmin')
+                    `, [normalizedUsername]);
+                }
 
                 if (!user) {
                     return res.status(401).json({
@@ -2072,13 +2879,74 @@ app.post(
                 });
             }
 
+            const managementRoles = ["assistant_hod", "associate_hod", "hod", "ao", "principal", "director"];
+            if (managementRoles.includes(requestedRole)) {
+                let user = null;
+                try {
+                    user = await postgres.get(`
+                        SELECT * FROM users
+                        WHERE username = ? AND (role = ? OR management_role = ?)
+                    `, [normalizedUsername, requestedRole, requestedRole]);
+                } catch (error) {
+                    if (isProduction || !normalizedUsername.startsWith("dev-")) throw error;
+                }
+                if (!user && !isProduction && normalizedUsername.startsWith("dev-")) {
+                    user = getLocalDevelopmentUser(`
+                        SELECT *, COALESCE(management_role, role) AS resolved_role
+                        FROM users
+                        WHERE username = ? AND (role = ? OR management_role = ?)
+                    `, [normalizedUsername, requestedRole, requestedRole]);
+                }
+                if (!user || !(await bcrypt.compare(normalizedPassword, user.password))) {
+                    return res.status(401).json({ status: "error", message: "Invalid management credentials" });
+                }
+
+                const resolvedRole = user.resolved_role || requestedRole;
+                let memberships = await departmentHierarchy.getUserDepartmentMembershipsAsync(user.id);
+                if (!memberships.length) {
+                    const repairedMembership = await ensureManagementDepartmentMembership(user, resolvedRole);
+                    if (repairedMembership) {
+                        memberships = [repairedMembership];
+                    }
+                }
+                const primaryMembership = memberships[0] || null;
+                const scope = departmentHierarchy.getRoleScope(resolvedRole);
+                const token = jwt.sign({
+                    id: user.id,
+                    username: user.username,
+                    role: resolvedRole,
+                    scope,
+                    department_id: primaryMembership?.department_id || null,
+                    department_code: primaryMembership?.code || null,
+                    department_name: primaryMembership?.name || null
+                }, JWT_SECRET, { expiresIn: "1d" });
+
+                return res.json({
+                    status: "success",
+                    message: "Management login successful",
+                    token,
+                    user: {
+                        id: user.id,
+                        username: user.username,
+                        role: resolvedRole,
+                        scope,
+                        department_id: primaryMembership?.department_id || null,
+                        department_code: primaryMembership?.code || null,
+                        department_name: primaryMembership?.name || null,
+                        permissions: await departmentHierarchy.getRolePermissionsAsync(resolvedRole)
+                    }
+                });
+            }
+
             if (requestedRole === "faculty") {
-                const user = db.prepare(`
+                let user;
+                if (parentFamily.isPostgresConfigured()) user = await postgres.get(`
                     SELECT *
                     FROM users
                     WHERE username = ?
                     AND role = 'faculty'
-                `).get(username);
+                `, [normalizedUsername]);
+                else user = getLocalDevelopmentUser("SELECT * FROM users WHERE username = ? AND role = 'faculty'", [normalizedUsername]);
 
                 if (!user) {
                     return res.status(401).json({
@@ -2095,13 +2963,30 @@ app.post(
                     });
                 }
 
-                const faculty = db.prepare(`
+                let faculty;
+                if (parentFamily.isPostgresConfigured()) faculty = await postgres.get(`
                     SELECT *
                     FROM faculty
                     WHERE user_id = ?
-                `).get(user.id);
+                `, [user.id]);
+                else faculty = getLocalDevelopmentUser("SELECT * FROM faculty WHERE user_id = ?", [user.id]);
 
-                const token = generateToken(user);
+                const facultyDepartment = parentFamily.isPostgresConfigured()
+                    ? await postgres.get(`
+                        SELECT id, code, name
+                        FROM departments
+                        WHERE code = ? OR name = ? OR name ILIKE ?
+                        ORDER BY id ASC
+                        LIMIT 1
+                    `, [faculty?.department || "", faculty?.department || "", `%${faculty?.department || ""}%`])
+                    : departmentHierarchy.resolveDepartmentByNameOrCode(faculty?.department || "");
+                const token = jwt.sign({
+                    id: user.id,
+                    username: user.username,
+                    role: user.role,
+                    scope: "DEPARTMENT",
+                    department_id: facultyDepartment?.id || null
+                }, JWT_SECRET, { expiresIn: "1d" });
                 return res.json({
                     status: "success",
                     message: "Faculty login successful",
@@ -2121,12 +3006,14 @@ app.post(
             }
 
             if (requestedRole === "student") {
-                const user = db.prepare(`
+                let user;
+                if (parentFamily.isPostgresConfigured()) user = await postgres.get(`
                     SELECT *
                     FROM users
                     WHERE username = ?
                     AND role = 'student'
-                `).get(username);
+                `, [normalizedUsername]);
+                else user = getLocalDevelopmentUser("SELECT * FROM users WHERE username = ? AND role = 'student'", [normalizedUsername]);
 
                 if (!user) {
                     return res.status(401).json({
@@ -2143,11 +3030,13 @@ app.post(
                     });
                 }
 
-                const student = db.prepare(`
+                let student;
+                if (parentFamily.isPostgresConfigured()) student = await postgres.get(`
                     SELECT *
                     FROM students
                     WHERE user_id = ?
-                `).get(user.id);
+                `, [user.id]);
+                else student = getLocalDevelopmentUser("SELECT * FROM students WHERE user_id = ?", [user.id]);
 
                 if (!student) {
                     return res.status(404).json({
@@ -2176,12 +3065,12 @@ app.post(
                 });
             }
 
-            const adminUser = db.prepare(`
+            const adminUser = await postgres.get(`
                 SELECT *
                 FROM users
                 WHERE username = ?
                 AND role IN ('admin', 'superadmin')
-            `).get(username);
+            `, [normalizedUsername]);
 
             if (adminUser) {
                 if (adminUser.username !== ALLOWED_ADMIN_USERNAME) {
@@ -2191,7 +3080,7 @@ app.post(
                     });
                 }
 
-                const passwordMatch = await bcrypt.compare(password, adminUser.password);
+                const passwordMatch = await bcrypt.compare(normalizedPassword, adminUser.password);
                 if (passwordMatch) {
                     const token = generateToken(adminUser);
                     return res.json({
@@ -2207,23 +3096,30 @@ app.post(
                 }
             }
 
-            const facultyUser = db.prepare(`
+            const facultyUser = await postgres.get(`
                 SELECT *
                 FROM users
                 WHERE username = ?
                 AND role = 'faculty'
-            `).get(username);
+            `, [normalizedUsername]);
 
             if (facultyUser) {
-                const passwordMatch = await bcrypt.compare(password, facultyUser.password);
+                const passwordMatch = await bcrypt.compare(normalizedPassword, facultyUser.password);
                 if (passwordMatch) {
-                    const faculty = db.prepare(`
+                    const faculty = await postgres.get(`
                         SELECT *
                         FROM faculty
                         WHERE user_id = ?
-                    `).get(facultyUser.id);
+                    `, [facultyUser.id]);
 
-                    const token = generateToken(facultyUser);
+                    const facultyDepartment = departmentHierarchy.resolveDepartmentByNameOrCode(faculty?.department || "");
+                    const token = jwt.sign({
+                        id: facultyUser.id,
+                        username: facultyUser.username,
+                        role: facultyUser.role,
+                        scope: "DEPARTMENT",
+                        department_id: facultyDepartment?.id || null
+                    }, JWT_SECRET, { expiresIn: "1d" });
                     return res.json({
                         status: "success",
                         message: "Faculty login successful",
@@ -2243,12 +3139,12 @@ app.post(
                 }
             }
 
-            const studentUser = db.prepare(`
+            const studentUser = await postgres.get(`
                 SELECT *
                 FROM users
                 WHERE username = ?
                 AND role = 'student'
-            `).get(username);
+            `, [normalizedUsername]);
 
             if (!studentUser) {
                 return res.status(401).json({
@@ -2257,7 +3153,7 @@ app.post(
                 });
             }
 
-            const passwordMatch = await bcrypt.compare(password, studentUser.password);
+            const passwordMatch = await bcrypt.compare(normalizedPassword, studentUser.password);
             if (!passwordMatch) {
                 return res.status(401).json({
                     status: "error",
@@ -2265,11 +3161,11 @@ app.post(
                 });
             }
 
-            const student = db.prepare(`
+            const student = await postgres.get(`
                 SELECT *
                 FROM students
                 WHERE user_id = ?
-            `).get(studentUser.id);
+            `, [studentUser.id]);
 
             if (!student) {
                 return res.status(404).json({
@@ -2343,6 +3239,7 @@ app.post(
                 parent_name,
                 parent_mobile,
                 parent_email,
+                parent_relationship,
 
                 address,
                 city,
@@ -2359,18 +3256,23 @@ app.post(
 
             } = req.body;
 
-            const normalizedStudentId = String(roll_number || student_id || "").trim();
-            const normalizedRollNumber = String(roll_number || student_id || "").trim();
-
-
-            // Required fields
+            const normalizedStudentId = safeString(roll_number || student_id).slice(0, 40);
+            const normalizedRollNumber = safeString(roll_number || student_id).slice(0, 40);
+            const normalizedUsername = safeString(username).slice(0, 80);
+            const normalizedPassword = String(password || "");
+            const normalizedFullName = safeString(full_name).slice(0, 200);
+            const normalizedEmail = safeString(email).toLowerCase();
+            const normalizedMobile = safeString(mobile).slice(0, 30);
+            const normalizedParentMobile = safeString(parent_mobile).slice(0, 30);
+            const normalizedParentEmail = safeString(parent_email).toLowerCase().slice(0, 255);
 
             if (
-                !username ||
-                !password ||
-                !full_name ||
+                !normalizedUsername ||
+                !normalizedPassword ||
+                !normalizedFullName ||
                 !normalizedStudentId ||
-                !email
+                !normalizedEmail ||
+                !isValidEmail(normalizedEmail)
             ) {
 
                 return res.status(400).json({
@@ -2378,8 +3280,7 @@ app.post(
                     status: "error",
 
                     message:
-                        "Username, password, full name, roll number and email are required"
-
+                    "Username, password, full name, valid email, and roll number are required"
                 });
 
             }
@@ -2403,11 +3304,11 @@ app.post(
             // Check username
 
             const existingUsername =
-                db.prepare(`
+                await postgres.get(`
                     SELECT id
                     FROM users
                     WHERE username = ?
-                `).get(username);
+                `, [normalizedUsername]);
 
 
             if (existingUsername) {
@@ -2427,11 +3328,11 @@ app.post(
             // Check student ID
 
             const existingStudent =
-                db.prepare(`
+                await postgres.get(`
                     SELECT id
                     FROM students
                     WHERE student_id = ? OR roll_number = ?
-                `).get(normalizedStudentId, normalizedRollNumber);
+                `, [normalizedStudentId, normalizedRollNumber]);
 
 
             if (existingStudent) {
@@ -2451,36 +3352,18 @@ app.post(
             // Hash password
 
             const hashedPassword =
-                await bcrypt.hash(
-                    password,
-                    10
-                );
+                await bcrypt.hash(normalizedPassword, 10);
 
-
-            // Create user
-
-            const userResult =
-                db.prepare(`
-                    INSERT INTO users
-                    (
-                        username,
-                        password,
-                        role
-                    )
+            const registration = await postgres.transaction(async transaction => {
+                const userResult = await transaction.run(`
+                    INSERT INTO users (username, password, role)
                     VALUES (?, ?, 'student')
-                `).run(
-                    username,
-                    hashedPassword
-                );
+                    RETURNING id
+                `, [username, hashedPassword]);
 
+                const userId = userResult.lastInsertRowid;
 
-            const userId =
-                userResult.lastInsertRowid;
-
-
-            // Create student
-
-            db.prepare(`
+                await transaction.run(`
                 INSERT INTO students
                 (
                     user_id,
@@ -2542,7 +3425,7 @@ app.post(
                     ?,
                     ?
                 )
-            `).run(
+                `, [
 
                 userId,
 
@@ -2579,19 +3462,35 @@ app.post(
                 registrationLinks.links.github_url || null,
                 registrationLinks.links.instagram_url || null,
                 registrationLinks.links.other_link_url || null,
-                registrationLinks.links.portfolio_url || null
+                    registrationLinks.links.portfolio_url || null
+                ]);
 
-            );
+                const registeredStudent = await transaction.get(`
+                    SELECT id, student_id, full_name, department, year, section, academic_year
+                    FROM students
+                    WHERE user_id = ?
+                `, [userId]);
 
+                return { userId, registeredStudent };
+            });
 
-            const registeredStudent = db.prepare(`
-                SELECT id, student_id, full_name, department, year, section, academic_year
-                FROM students
-                WHERE user_id = ?
-            `).get(userId);
+            const parentRecord = await parentFamily.insertOrGetParentAsync({
+                fullName: parent_name || "Parent / Guardian",
+                mobile: parent_mobile || mobile || null,
+                email: parent_email || null
+            });
+
+            if (parentRecord && registration.registeredStudent) {
+                await parentFamily.ensureParentLinkAsync(
+                    parentRecord.id,
+                    registration.registeredStudent.id,
+                    parent_relationship || "Guardian",
+                    1
+                );
+            }
 
             const token = generateToken({
-                id: userId,
+                id: registration.userId,
                 username,
                 role: "student"
             });
@@ -2605,11 +3504,11 @@ app.post(
 
                 token,
                 user: {
-                    id: userId,
+                    id: registration.userId,
                     username,
                     role: "student"
                 },
-                student: registeredStudent
+                student: registration.registeredStudent
 
             });
 
@@ -2654,12 +3553,12 @@ app.post(
                 });
             }
 
-            const user = db.prepare(`
+                        const user = await postgres.get(`
                 SELECT *
                 FROM users
                 WHERE username = ?
                   AND role = 'faculty'
-            `).get(username);
+                        `, [username]);
 
             if (!user) {
                 return res.status(401).json({
@@ -2676,13 +3575,30 @@ app.post(
                 });
             }
 
-            const faculty = db.prepare(`
+            const faculty = await postgres.get(`
                 SELECT *
                 FROM faculty
                 WHERE user_id = ?
-            `).get(user.id);
+            `, [user.id]);
 
-            const token = generateToken(user);
+            const facultyDepartment = faculty?.department
+                ? await postgres.get(`
+                    SELECT id, code, name
+                    FROM departments
+                    WHERE code = ? OR name = ? OR name ILIKE ?
+                    ORDER BY id ASC
+                    LIMIT 1
+                `, [faculty.department, faculty.department, `%${faculty.department}%`])
+                : null;
+            const token = jwt.sign({
+                id: user.id,
+                username: user.username,
+                role: user.role,
+                scope: "DEPARTMENT",
+                department_id: facultyDepartment?.id || null,
+                department_code: facultyDepartment?.code || null,
+                department_name: facultyDepartment?.name || faculty?.department || null
+            }, JWT_SECRET, { expiresIn: "1d" });
 
             return res.json({
                 status: "success",
@@ -2714,13 +3630,14 @@ app.get(
     "/api/faculty/dashboard",
     authenticateToken,
     requireFaculty,
-    (req, res) => {
+    requireDepartmentAccess("department.student.read"),
+    async (req, res) => {
         try {
-            const faculty = db.prepare(`
+            const faculty = await runtimeGet(`
                 SELECT *
                 FROM faculty
                 WHERE user_id = ?
-            `).get(req.user.id);
+            `, [req.user.id]);
 
             if (!faculty) {
                 return res.status(404).json({
@@ -2729,24 +3646,29 @@ app.get(
                 });
             }
 
-            const studentCount = db.prepare(`SELECT COUNT(*) AS count FROM students`).get().count;
-            const attendanceCount = db.prepare(`SELECT COUNT(*) AS count FROM attendance`).get().count;
-            const notificationCount = db.prepare(`SELECT COUNT(*) AS count FROM notifications`).get().count;
-            const subjects = db.prepare(`
+            const studentCount = await runtimeGet(`SELECT COUNT(*) AS count FROM students WHERE department = ?`, [faculty.department]);
+            const attendanceCount = await runtimeGet(`
+                SELECT COUNT(*) AS count
+                FROM attendance a
+                JOIN students s ON s.id = a.student_id
+                WHERE s.department = ?
+            `, [faculty.department]);
+            const notificationCount = await runtimeGet(`SELECT COUNT(*) AS count FROM notifications`);
+            const subjects = await runtimeAll(`
                 SELECT *
                 FROM subjects
                 WHERE department = ?
                 ORDER BY id DESC
                 LIMIT 5
-            `).all(faculty.department || "Computer Science");
+            `, [faculty.department || "Computer Science"]);
 
             return res.json({
                 status: "success",
                 faculty,
                 summary: {
-                    total_students: Number(studentCount || 0),
-                    total_attendance_records: Number(attendanceCount || 0),
-                    total_notifications: Number(notificationCount || 0)
+                    total_students: Number(studentCount?.count || 0),
+                    total_attendance_records: Number(attendanceCount?.count || 0),
+                    total_notifications: Number(notificationCount?.count || 0)
                 },
                 subjects
             });
@@ -2754,9 +3676,176 @@ app.get(
             console.error("Faculty dashboard error:", error);
             return res.status(500).json({
                 status: "error",
-                message: error.message
+                message: "Unable to load faculty dashboard"
             });
         }
+    }
+);
+
+app.get(
+    "/api/management/dashboard",
+    authenticateToken,
+    requireManagementAccess({ departmentPermission: "department.student.read", collegePermission: "students.view" }),
+    async (req, res) => {
+        const department = getManagementDepartment(req);
+        const departmentFilter = department ? "WHERE s.department IN (?, ?)" : "";
+        const params = department ? [department.code, department.name] : [];
+        const students = await runtimeGet(`SELECT COUNT(*) AS count FROM students s ${departmentFilter}`, params);
+        const faculty = await runtimeGet(`SELECT COUNT(*) AS count FROM faculty f ${department ? "WHERE f.department IN (?, ?)" : ""}`, params);
+        return res.json({
+            status: "success",
+            scope: req.user.scope,
+            role: req.user.role,
+            department: department || null,
+            permissions: departmentHierarchy.getRolePermissions(req.user.role),
+            stats: { students: Number(students?.count || 0), faculty: Number(faculty?.count || 0) }
+        });
+    }
+);
+
+app.get(
+    "/api/management/students",
+    authenticateToken,
+    requireManagementAccess({ departmentPermission: "department.student.read", collegePermission: "students.view" }),
+    async (req, res) => {
+        const department = getManagementDepartment(req);
+        const where = department ? "WHERE s.department IN (?, ?)" : "";
+        const params = department ? [department.code, department.name] : [];
+        const students = await runtimeAll(`
+            SELECT s.id, s.student_id, s.roll_number, s.full_name, s.department, s.year, s.section
+            FROM students s ${where}
+            ORDER BY s.full_name ASC
+            LIMIT 500
+        `, params);
+        return res.json({ status: "success", students });
+    }
+);
+
+app.get(
+    "/api/management/faculty",
+    authenticateToken,
+    requireManagementAccess({ departmentPermission: "department.faculty.read", collegePermission: "faculty.view" }),
+    async (req, res) => {
+        const department = getManagementDepartment(req);
+        const where = department ? "WHERE f.department IN (?, ?)" : "";
+        const params = department ? [department.code, department.name] : [];
+        const faculty = await runtimeAll(`
+            SELECT f.id, f.faculty_id, f.full_name, f.department, f.designation, f.email
+            FROM faculty f ${where}
+            ORDER BY f.full_name ASC
+            LIMIT 500
+        `, params);
+        return res.json({ status: "success", faculty });
+    }
+);
+
+app.get(
+    "/api/management/academic",
+    authenticateToken,
+    requireManagementAccess({ departmentPermission: "department.results.read", collegePermission: "results.view" }),
+    async (req, res) => {
+        const department = getManagementDepartment(req);
+        const where = department ? "WHERE r.department IN (?, ?)" : "";
+        const params = department ? [department.code, department.name] : [];
+        const results = await runtimeAll(`
+            SELECT r.department, r.subject, r.subject_code, COUNT(*) AS records,
+                   AVG(r.total_marks) AS average_marks
+            FROM result_records r ${where}
+            GROUP BY r.department, r.subject, r.subject_code
+            ORDER BY r.department, r.subject
+            LIMIT 500
+        `, params);
+        return res.json({ status: "success", results });
+    }
+);
+
+app.get(
+    "/api/management/attendance",
+    authenticateToken,
+    requireManagementAccess({ departmentPermission: "department.attendance.read", collegePermission: "attendance.view" }),
+    async (req, res) => {
+        const department = getManagementDepartment(req);
+        const where = department ? "WHERE s.department IN (?, ?)" : "";
+        const params = department ? [department.code, department.name] : [];
+        const attendance = await runtimeAll(`
+            SELECT a.attendance_date, a.subject, a.status, s.student_id, s.department
+            FROM attendance a JOIN students s ON s.id = a.student_id
+            ${where} ORDER BY a.attendance_date DESC LIMIT 500
+        `, params);
+        return res.json({ status: "success", attendance });
+    }
+);
+
+app.get(
+    "/api/management/assignments",
+    authenticateToken,
+    requireManagementAccess({ departmentPermission: "department.assignments.read", collegePermission: "assignments.view" }),
+    async (req, res) => {
+        const department = getManagementDepartment(req);
+        const where = department ? "WHERE sm.department IN (?, ?)" : "";
+        const params = department ? [department.code, department.name] : [];
+        const assignments = await runtimeAll(`
+            SELECT a.id, a.title, a.deadline, sm.department, sm.code AS subject_code
+            FROM assignments a JOIN subjects sm ON sm.id = a.subject_id
+            ${where} ORDER BY a.deadline ASC, a.id DESC LIMIT 500
+        `, params);
+        return res.json({ status: "success", assignments });
+    }
+);
+
+app.get(
+    "/api/management/materials",
+    authenticateToken,
+    requireManagementAccess({ departmentPermission: "department.materials.read", collegePermission: "study_materials.view" }),
+    async (req, res) => {
+        const department = getManagementDepartment(req);
+        const where = department ? "WHERE department IN (?, ?)" : "";
+        const params = department ? [department.code, department.name] : [];
+        const materials = await runtimeAll(`
+            SELECT id, title, subject, department, year, section, created_at
+            FROM study_materials ${where} ORDER BY created_at DESC, id DESC LIMIT 500
+        `, params);
+        return res.json({ status: "success", materials });
+    }
+);
+
+app.get(
+    "/api/management/notifications",
+    authenticateToken,
+    requireManagementAccess({ departmentPermission: "department.notifications.read", collegePermission: "notifications.view" }),
+    async (req, res) => {
+        const department = getManagementDepartment(req);
+        const notifications = department
+            ? await runtimeAll("SELECT * FROM notifications WHERE audience = 'All' OR branch IN (?, ?) ORDER BY created_at DESC LIMIT 500", [department.code, department.name])
+            : await runtimeAll("SELECT * FROM notifications ORDER BY created_at DESC LIMIT 500");
+        return res.json({ status: "success", notifications });
+    }
+);
+
+app.get(
+    "/api/management/reports",
+    authenticateToken,
+    requireManagementAccess({ departmentPermission: "department.reports.read", collegePermission: "reports.view" }),
+    async (req, res) => {
+        const department = getManagementDepartment(req);
+        const where = department ? "WHERE s.department IN (?, ?)" : "";
+        const params = department ? [department.code, department.name] : [];
+        const summary = await runtimeGet(`
+            SELECT COUNT(*) AS students,
+                   (SELECT COUNT(*) FROM faculty f ${department ? "WHERE f.department IN (?, ?)" : ""}) AS faculty
+            FROM students s ${where}
+        `, [...params, ...params]);
+        return res.json({ status: "success", summary });
+    }
+);
+
+app.get(
+    "/api/management/roles",
+    authenticateToken,
+    requireManagementAccess({ collegePermission: "roles.manage", roles: ["admin", "superadmin"] }),
+    async (req, res) => {
+        const roles = await runtimeAll("SELECT name, description FROM roles ORDER BY name");
+        return res.json({ status: "success", roles });
     }
 );
 
@@ -2790,12 +3879,12 @@ app.post(
 
 
             const user =
-                db.prepare(`
+                await postgres.get(`
                     SELECT *
                     FROM users
                     WHERE username = ?
                     AND role = 'student'
-                `).get(username);
+                `, [username]);
 
 
             if (!user) {
@@ -2834,11 +3923,11 @@ app.post(
 
 
             const student =
-                db.prepare(`
+                await postgres.get(`
                     SELECT *
                     FROM students
                     WHERE user_id = ?
-                `).get(user.id);
+                `, [user.id]);
 
 
             if (!student) {
@@ -2929,98 +4018,207 @@ app.post(
 app.post(
     "/api/parent/login",
     async (req, res) => {
-
-        try {
-
-            const {
-                student_id: studentId,
-                parent_mobile: parentMobile,
-                parent_email: parentEmail
-            } = req.body;
-
-            if (!studentId || (!parentMobile && !parentEmail)) {
-                return res.status(400).json({
-                    status: "error",
-                    message: "Student ID and parent mobile or email are required"
-                });
-            }
-
-            const student = db.prepare(`
-                SELECT *
-                FROM students
-                WHERE student_id = ?
-                  AND (
-                    parent_mobile = ? OR parent_email = ?
-                  )
-            `).get(
-                String(studentId).trim(),
-                parentMobile ? String(parentMobile).trim() : null,
-                parentEmail ? String(parentEmail).trim() : null
-            );
-
-            if (!student) {
-                return res.status(401).json({
-                    status: "error",
-                    message: "Parent credentials do not match any student record"
-                });
-            }
-
-            const token = jwt.sign(
-                {
-                    id: student.user_id,
-                    role: "parent",
-                    parent_name: student.parent_name,
-                    student_id: student.student_id
-                },
-                JWT_SECRET,
-                { expiresIn: "1d" }
-            );
-
-            return res.json({
-                status: "success",
-                message: "Parent login successful",
-                token,
-                student: {
-                    id: student.id,
-                    student_id: student.student_id,
-                    full_name: student.full_name,
-                    department: student.department,
-                    year: student.year,
-                    section: student.section,
-                    parent_name: student.parent_name
-                }
-            });
-
-        } catch (error) {
-            console.error("Parent login error:", error);
-            return res.status(500).json({
-                status: "error",
-                message: "Server error during parent login"
-            });
-        }
+        return res.status(410).json({
+            status: "error",
+            message: "Parent login requires OTP verification. Use /api/parent/request-otp and /api/parent/verify-otp."
+        });
     }
 );
+
+app.post("/api/parent/request-otp", async (req, res) => {
+    try {
+        const { mobile, email, purpose = "login" } = req.body || {};
+        if (!["registration verification", "login", "mobile change"].includes(purpose)) {
+            return res.status(400).json({ status: "error", message: "Invalid OTP purpose" });
+        }
+        const parent = await parentFamily.getParentByMobileOrEmailAsync(mobile, email);
+
+        if (!parent) {
+            return res.status(404).json({ status: "error", message: "Parent record not found" });
+        }
+
+        const result = await parentFamily.createParentOtpRecordAsync(parent.id, purpose, 10);
+        if (!isProduction) {
+            console.log(`[DEV OTP] Parent OTP issued for parent_id=${parent.id}: ${result.otp}`);
+        }
+
+        return res.json({
+            status: "success",
+            message: "One-time password has been issued securely. Use the development OTP from the server log in demo mode.",
+            parent_id: parent.id,
+            purpose
+        });
+    } catch (error) {
+        console.error("Parent OTP request error:", error);
+        return res.status(500).json({ status: "error", message: "Unable to request parent OTP" });
+    }
+});
+
+app.post("/api/parent/verify-otp", async (req, res) => {
+    try {
+        const { mobile, email, otp, purpose = "login" } = req.body || {};
+        const parent = await parentFamily.getParentByMobileOrEmailAsync(mobile, email);
+
+        if (!parent) {
+            return res.status(404).json({ status: "error", message: "Parent record not found" });
+        }
+
+        const verification = await parentFamily.verifyParentOtpAsync(parent.id, otp, purpose);
+        if (!verification.valid) {
+            return res.status(400).json({ status: "error", message: "OTP is invalid or expired" });
+        }
+
+        const token = jwt.sign({
+            id: parent.id,
+            username: parent.mobile || parent.email || `parent-${parent.id}`,
+            role: "parent",
+            scope: "STUDENT_LINKED",
+            parent_id: parent.id,
+            parent_name: parent.full_name,
+            parent_mobile: parent.mobile,
+            parent_email: parent.email,
+            otp_verified: true
+        }, JWT_SECRET, { expiresIn: "1d" });
+
+        return res.json({
+            status: "success",
+            message: "Parent OTP verified successfully",
+            token,
+            user: {
+                id: parent.id,
+                username: parent.mobile || parent.email || `parent-${parent.id}`,
+                role: "parent",
+                scope: "STUDENT_LINKED"
+            },
+            children: await parentFamily.getLinkedStudentsForParentAsync(parent.id)
+        });
+    } catch (error) {
+        console.error("Parent OTP verification error:", error);
+        return res.status(500).json({ status: "error", message: "Unable to verify parent OTP" });
+    }
+});
+
+app.post("/api/parent/mobile-change/request", authenticateToken, requireParent, async (req, res) => {
+    try {
+        const parentId = Number(req.user.parent_id || req.user.id || 0);
+        const newMobile = parentFamily.normalizeParentMobile(req.body?.new_mobile);
+        if (!parentId || !newMobile) {
+            return res.status(400).json({ status: "error", message: "A valid new mobile number is required" });
+        }
+        if (newMobile === parentFamily.normalizeParentMobile(req.user.parent_mobile)) {
+            return res.status(400).json({ status: "error", message: "New mobile number must be different" });
+        }
+        const existingParent = await parentFamily.getParentByMobileOrEmailAsync(newMobile, null);
+        if (existingParent && Number(existingParent.id) !== parentId) {
+            return res.status(409).json({ status: "error", message: "Mobile number is already registered" });
+        }
+        await parentFamily.createParentOtpRecordAsync(parentId, "mobile change", 10);
+        return res.json({ status: "success", message: "Mobile change OTP requested" });
+    } catch (error) {
+        console.error("Parent mobile change request error:", error);
+        return res.status(500).json({ status: "error", message: "Unable to request mobile change" });
+    }
+});
+
+app.post("/api/parent/mobile-change/confirm", authenticateToken, requireParent, async (req, res) => {
+    try {
+        const parentId = Number(req.user.parent_id || req.user.id || 0);
+        const newMobile = parentFamily.normalizeParentMobile(req.body?.new_mobile);
+        const otp = String(req.body?.otp || "").trim();
+        if (!parentId || !newMobile || !/^\d{6}$/.test(otp)) {
+            return res.status(400).json({ status: "error", message: "New mobile number and 6-digit OTP are required" });
+        }
+        const existingParent = await parentFamily.getParentByMobileOrEmailAsync(newMobile, null);
+        if (existingParent && Number(existingParent.id) !== parentId) {
+            return res.status(409).json({ status: "error", message: "Mobile number is already registered" });
+        }
+        const verification = await parentFamily.verifyParentOtpAsync(parentId, otp, "mobile change");
+        if (!verification.valid) {
+            return res.status(400).json({ status: "error", message: "OTP is invalid or expired" });
+        }
+        const parent = await parentFamily.updateParentMobileAsync(parentId, newMobile);
+        if (!parent) return res.status(404).json({ status: "error", message: "Parent record not found" });
+        const token = jwt.sign({
+            id: parent.id,
+            username: parent.mobile || parent.email || `parent-${parent.id}`,
+            role: "parent",
+            scope: "STUDENT_LINKED",
+            parent_id: parent.id,
+            parent_name: parent.full_name,
+            parent_mobile: parent.mobile,
+            parent_email: parent.email,
+            otp_verified: true
+        }, JWT_SECRET, { expiresIn: "1d" });
+        return res.json({ status: "success", message: "Parent mobile updated", token });
+    } catch (error) {
+        console.error("Parent mobile change confirmation error:", error);
+        return res.status(500).json({ status: "error", message: "Unable to update parent mobile" });
+    }
+});
+
+app.get("/api/parent/children", authenticateToken, requireParent, async (req, res) => {
+    try {
+        const parentId = Number(req.user.parent_id || req.user.id || 0);
+        if (!parentId || req.user.role !== "parent") {
+            return res.status(403).json({ status: "error", message: "Parent session not available" });
+        }
+
+        const linkedStudents = await parentFamily.getLinkedStudentsForParentAsync(parentId);
+        return res.json({ status: "success", children: linkedStudents });
+    } catch (error) {
+        console.error("Parent children fetch error:", error);
+        return res.status(500).json({ status: "error", message: "Unable to load linked children" });
+    }
+});
 
 app.get(
     "/api/parent/dashboard",
     authenticateToken,
     requireParent,
-    (req, res) => {
+    async (req, res) => {
         try {
-            const student = db.prepare(`
-                SELECT *
-                FROM students
-                WHERE student_id = ?
-            `).get(req.user.student_id);
+            const parentId = Number(req.user.parent_id || req.user.id || 0);
+            const requestedStudentId = req.query.student_id ? Number(req.query.student_id) : null;
+            const legacyStudentId = req.user.student_id ? String(req.user.student_id).trim() : null;
+            let student = null;
 
-            if (!student) {
-                return res.status(404).json({
-                    status: "error",
-                    message: "Linked student record not found"
-                });
+            if (parentId) {
+                const linkedStudentId = requestedStudentId || (legacyStudentId ? Number(legacyStudentId) : null);
+                if (!linkedStudentId) {
+                    const linkedStudents = await parentFamily.getLinkedStudentsForParentAsync(parentId);
+                    return res.json({ status: "success", student: null, children: linkedStudents });
+                }
+
+                if (parentFamily.isPostgresConfigured()) {
+                    const dashboard = await parentFamily.getParentDashboardDataAsync(parentId, linkedStudentId);
+                    if (!dashboard) {
+                        return res.status(403).json({ status: "error", message: "Selected student is not linked to this parent" });
+                    }
+                    return res.json({ status: "success", ...dashboard });
+                }
+
+                const linkedStudent = await runtimeGet(`
+                    SELECT s.*
+                    FROM parent_student_links l
+                    JOIN students s ON s.id = l.student_id
+                    WHERE l.parent_id = ? AND l.student_id = ? AND l.status = 'active'
+                    LIMIT 1
+                `, [parentId, linkedStudentId]);
+
+                if (!linkedStudent) {
+                    return res.status(403).json({ status: "error", message: "Selected student is not linked to this parent" });
+                }
+
+                student = linkedStudent;
+            } else {
+                student = await runtimeGet(`SELECT * FROM students WHERE student_id = ?`, [legacyStudentId]);
             }
 
-            const feeSummary = db.prepare(`
+            if (!student) {
+                return res.status(404).json({ status: "error", message: "Linked student record not found" });
+            }
+
+            const feeSummary = await runtimeGet(`
                 SELECT
                     COALESCE(SUM(total_amount), 0) AS total_amount,
                     COALESCE(SUM(paid_amount), 0) AS paid_amount,
@@ -3028,9 +4226,9 @@ app.get(
                     COUNT(*) AS records
                 FROM fees
                 WHERE student_id = ?
-            `).get(student.id);
+            `, [student.id]);
 
-            const attendance = db.prepare(`
+            const attendance = await runtimeAll(`
                 SELECT
                     a.id,
                     a.student_id,
@@ -3042,9 +4240,9 @@ app.get(
                 WHERE a.student_id = ?
                 ORDER BY a.attendance_date DESC
                 LIMIT 20
-            `).all(student.id);
+            `, [student.id]);
 
-            const marks = db.prepare(`
+            const marks = await runtimeAll(`
                 SELECT
                     m.id,
                     m.student_id,
@@ -3060,16 +4258,16 @@ app.get(
                 WHERE m.student_id = ?
                 ORDER BY COALESCE(m.exam_date, '') DESC, m.id DESC
                 LIMIT 20
-            `).all(student.id);
+            `, [student.id]);
 
-            const notifications = db.prepare(`
+            const notifications = await runtimeAll(`
                 SELECT *
                 FROM notifications
                 WHERE audience = 'All'
                    OR audience = 'Parents'
                 ORDER BY created_at DESC
                 LIMIT 20
-            `).all();
+            `);
 
             return res.json({
                 status: "success",
@@ -3077,14 +4275,15 @@ app.get(
                 feeSummary,
                 attendance,
                 marks,
-                notifications
+                notifications,
+                children: parentId ? await parentFamily.getLinkedStudentsForParentAsync(parentId) : []
             });
 
         } catch (error) {
             console.error("Parent dashboard error:", error);
             return res.status(500).json({
                 status: "error",
-                message: error.message
+                message: "Unable to load student profile"
             });
         }
     }
@@ -3094,22 +4293,45 @@ app.get(
     "/api/parent/student-profile",
     authenticateToken,
     requireParent,
-    (req, res) => {
+    async (req, res) => {
         try {
-            const student = db.prepare(`
-                SELECT *
-                FROM students
-                WHERE student_id = ?
-            `).get(req.user.student_id);
+            const parentId = Number(req.user.parent_id || req.user.id || 0);
+            const requestedStudentId = req.query.student_id ? Number(req.query.student_id) : null;
+            let student = null;
+
+            if (parentId) {
+                const studentId = requestedStudentId || Number(req.user.student_id || 0);
+                if (!studentId) {
+                    return res.status(400).json({ status: "error", message: "A linked student ID is required" });
+                }
+
+                if (parentFamily.isPostgresConfigured()) {
+                    const profile = await parentFamily.getParentProfileDataAsync(parentId, studentId);
+                    if (!profile) {
+                        return res.status(403).json({ status: "error", message: "Selected student is not linked to this parent" });
+                    }
+                    return res.json({ status: "success", ...profile });
+                }
+
+                student = await runtimeGet(`
+                    SELECT s.*
+                    FROM parent_student_links l
+                    JOIN students s ON s.id = l.student_id
+                    WHERE l.parent_id = ? AND l.student_id = ? AND l.status = 'active'
+                    LIMIT 1
+                `, [parentId, studentId]);
+            } else {
+                student = await runtimeGet(`SELECT * FROM students WHERE student_id = ?`, [req.user.student_id]);
+            }
 
             if (!student) {
-                return res.status(404).json({
+                return res.status(403).json({
                     status: "error",
-                    message: "Linked student record not found"
+                    message: "Selected student is not linked to this parent"
                 });
             }
 
-            const attendance = db.prepare(`
+            const attendance = await runtimeAll(`
                 SELECT
                     a.id,
                     a.student_id,
@@ -3121,9 +4343,9 @@ app.get(
                 WHERE a.student_id = ?
                 ORDER BY a.attendance_date DESC
                 LIMIT 30
-            `).all(student.id);
+            `, [student.id]);
 
-            const marks = db.prepare(`
+            const marks = await runtimeAll(`
                 SELECT
                     m.id,
                     m.student_id,
@@ -3139,23 +4361,23 @@ app.get(
                 WHERE m.student_id = ?
                 ORDER BY COALESCE(m.exam_date, '') DESC, m.id DESC
                 LIMIT 30
-            `).all(student.id);
+            `, [student.id]);
 
-            const fees = db.prepare(`
+            const fees = await runtimeAll(`
                 SELECT *
                 FROM fees
                 WHERE student_id = ?
                 ORDER BY academic_year DESC, fee_year DESC
-            `).all(student.id);
+            `, [student.id]);
 
-            const notifications = db.prepare(`
+            const notifications = await runtimeAll(`
                 SELECT *
                 FROM notifications
                 WHERE audience = 'All'
                    OR audience = 'Parents'
                 ORDER BY created_at DESC
                 LIMIT 20
-            `).all();
+            `);
 
             return res.json({
                 status: "success",
@@ -3170,7 +4392,7 @@ app.get(
             console.error("Parent student profile error:", error);
             return res.status(500).json({
                 status: "error",
-                message: error.message
+                message: "Unable to load student profile"
             });
         }
     }
@@ -3210,13 +4432,20 @@ app.post(
             }
 
 
-            const user =
-                db.prepare(`
+            let user =
+                await postgres.get(`
                     SELECT *
                     FROM users
                     WHERE username = ?
                     AND role IN ('admin', 'superadmin')
-                `).get(username);
+                `, [username]);
+
+            if (!user && !isProduction && String(username).startsWith("dev-")) {
+                user = getLocalDevelopmentUser(`
+                    SELECT * FROM users
+                    WHERE username = ? AND role IN ('admin', 'superadmin')
+                `, [username]);
+            }
 
 
             if (!user) {
@@ -3313,7 +4542,7 @@ app.get(
     "/api/admin/students",
     authenticateToken,
     requireAdmin,
-    (req, res) => {
+    async (req, res) => {
 
         try {
             const { page, limit, offset } = getPagination(req);
@@ -3333,19 +4562,20 @@ app.get(
             }
             const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
 
-            const students = db.prepare(`
+            const students = await runtimeAll(`
                 SELECT s.*, u.username
                 FROM students s
                 LEFT JOIN users u ON u.id = s.user_id
                 ${whereSql}
                 ORDER BY s.id DESC
                 LIMIT ? OFFSET ?
-            `).all(...params, limit, offset);
-            const total = db.prepare(`
+            `, [...params, limit, offset]);
+            const totalRow = await runtimeGet(`
                 SELECT COUNT(*) AS total
                 FROM students s
                 ${whereSql}
-            `).get(...params).total;
+            `, params);
+            const total = Number(totalRow?.total || 0);
 
             return res.json({
                 status: "success",
@@ -3360,7 +4590,7 @@ app.get(
 
             return res.status(500).json({
                 status: "error",
-                message: error.message
+                message: "Unable to load students"
             });
 
         }
@@ -3372,11 +4602,11 @@ app.get(
     "/api/admin/students/export",
     authenticateToken,
     requireAdmin,
-    (req, res) => {
+    async (req, res) => {
 
         try {
 
-            const students = db.prepare(`
+            const students = await runtimeAll(`
                 SELECT
                     s.id,
                     s.full_name,
@@ -3393,7 +4623,7 @@ app.get(
                 FROM students s
                 LEFT JOIN users u ON u.id = s.user_id
                 ORDER BY s.id DESC
-            `).all();
+            `);
 
             const workbook = XLSX.utils.book_new();
             const worksheet = XLSX.utils.json_to_sheet(students);
@@ -3420,7 +4650,7 @@ app.get(
 
             return res.status(500).json({
                 status: "error",
-                message: error.message
+                message: "Unable to export students"
             });
 
         }
@@ -3501,19 +4731,24 @@ app.get(
     "/api/admin/faculty",
     authenticateToken,
     requireAdmin,
-    (req, res) => {
+    async (req, res) => {
 
         try {
             const { page, limit, offset } = getPagination(req);
             const search = getSearchTerm(req);
-            const where = search
-                ? "WHERE full_name LIKE ? OR faculty_id LIKE ? OR email LIKE ?"
-                : "";
+            const department = String(req.query.department || "").trim();
+            const filters = [];
             const searchParams = search
                 ? [`%${search}%`, `%${search}%`, `%${search}%`]
                 : [];
+            if (search) filters.push("(full_name LIKE ? OR faculty_id LIKE ? OR email LIKE ?)");
+            if (department) {
+                filters.push("department = ?");
+                searchParams.push(department);
+            }
+            const where = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
 
-            const faculty = db.prepare(`
+            const faculty = await runtimeAll(`
                 SELECT
                     id,
                     faculty_id,
@@ -3527,10 +4762,11 @@ app.get(
                 ${where}
                 ORDER BY id DESC
                 LIMIT ? OFFSET ?
-            `).all(...searchParams, limit, offset);
-            const total = db.prepare(`
+            `, [...searchParams, limit, offset]);
+            const totalRow = await runtimeGet(`
                 SELECT COUNT(*) AS total FROM faculty ${where}
-            `).get(...searchParams).total;
+            `, searchParams);
+            const total = Number(totalRow?.total || 0);
 
             return res.json({
                 status: "success",
@@ -3545,7 +4781,7 @@ app.get(
 
             return res.status(500).json({
                 status: "error",
-                message: error.message
+                message: "Unable to load faculty"
             });
 
         }
@@ -3556,7 +4792,7 @@ app.post(
     "/api/admin/faculty",
     authenticateToken,
     requireAdmin,
-    (req, res) => {
+    async (req, res) => {
 
         try {
 
@@ -3576,35 +4812,38 @@ app.post(
                 });
             }
 
-            const result = db.prepare(`
+            const result = await runtimeRun(`
                 INSERT INTO faculty
                     (faculty_id, full_name, department, designation, email, mobile, user_id)
                 VALUES (?, ?, ?, ?, ?, ?, NULL)
-            `).run(
+                RETURNING id
+            `, [
                 facultyId.trim(),
                 fullName.trim(),
                 department?.trim() || null,
                 designation?.trim() || null,
                 email?.trim() || null,
                 mobile?.trim() || null
-            );
+            ]);
 
-            db.prepare(`
+            const facultyRecordId = result.lastInsertRowid ?? result.rows?.[0]?.id;
+
+            await runtimeRun(`
                 INSERT INTO audit_logs
                     (user_id, action, entity_type, entity_id, metadata)
                 VALUES (?, ?, ?, ?, ?)
-            `).run(
+            `, [
                 req.user.id,
                 "CREATE",
                 "faculty",
-                result.lastInsertRowid,
+                facultyRecordId,
                 JSON.stringify({ facultyId, fullName })
-            );
+            ]);
 
             return res.status(201).json({
                 status: "success",
                 message: "Faculty record created",
-                faculty_id: result.lastInsertRowid
+                faculty_id: facultyRecordId
             });
 
         } catch (error) {
@@ -3620,7 +4859,7 @@ app.post(
 
             return res.status(500).json({
                 status: "error",
-                message: error.message
+                message: "Unable to create faculty record"
             });
 
         }
@@ -3631,15 +4870,15 @@ app.delete(
     "/api/admin/faculty/:id",
     authenticateToken,
     requireAdmin,
-    (req, res) => {
+    async (req, res) => {
 
         try {
 
             const facultyId = Number(req.params.id);
-            const result = db.prepare(`
+            const result = await runtimeRun(`
                 DELETE FROM faculty
                 WHERE id = ?
-            `).run(facultyId);
+            `, [facultyId]);
 
             if (!result.changes) {
                 return res.status(404).json({
@@ -3648,11 +4887,11 @@ app.delete(
                 });
             }
 
-            db.prepare(`
+            await runtimeRun(`
                 INSERT INTO audit_logs
                     (user_id, action, entity_type, entity_id)
                 VALUES (?, ?, ?, ?)
-            `).run(req.user.id, "DELETE", "faculty", facultyId);
+            `, [req.user.id, "DELETE", "faculty", facultyId]);
 
             return res.json({
                 status: "success",
@@ -3665,7 +4904,7 @@ app.delete(
 
             return res.status(500).json({
                 status: "error",
-                message: error.message
+                message: "Unable to delete faculty record"
             });
 
         }
@@ -3681,7 +4920,7 @@ app.get(
     "/api/admin/fees",
     authenticateToken,
     requireAdmin,
-    (req, res) => {
+    async (req, res) => {
 
         try {
             const { page, limit, offset } = getPagination(req);
@@ -3693,7 +4932,7 @@ app.get(
                 ? [`%${search}%`, `%${search}%`, `%${search}%`]
                 : [];
 
-            const fees = db.prepare(`
+            const fees = await runtimeAll(`
                 SELECT
                     f.*,
                     s.full_name,
@@ -3704,29 +4943,29 @@ app.get(
                 ${where}
                 ORDER BY f.id DESC
                 LIMIT ? OFFSET ?
-            `).all(...searchParams, limit, offset);
+            `, [...searchParams, limit, offset]);
 
-            const total = db.prepare(`
+            const totalRow = await runtimeGet(`
                 SELECT COUNT(*) AS total
                 FROM fees f
                 LEFT JOIN students s ON s.id = f.student_id
                 ${where}
-            `).get(...searchParams).total;
+            `, searchParams);
 
-            const summary = db.prepare(`
+            const summary = await runtimeGet(`
                 SELECT
                     COUNT(*) AS records,
                     COALESCE(SUM(total_amount), 0) AS total_amount,
                     COALESCE(SUM(paid_amount), 0) AS paid_amount,
                     COALESCE(SUM(pending_amount), 0) AS pending_amount
                 FROM fees
-            `).get();
+            `);
 
             return res.json({
                 status: "success",
                 fees,
                 summary,
-                pagination: { page, limit, total, total_pages: Math.ceil(total / limit) }
+                pagination: { page, limit, total: Number(totalRow?.total || 0), total_pages: Math.ceil(Number(totalRow?.total || 0) / limit) }
             });
 
         } catch (error) {
@@ -3735,7 +4974,7 @@ app.get(
 
             return res.status(500).json({
                 status: "error",
-                message: error.message
+                message: "Unable to load fees"
             });
 
         }
@@ -3746,7 +4985,7 @@ app.post(
     "/api/admin/fees",
     authenticateToken,
     requireAdmin,
-    (req, res) => {
+    async (req, res) => {
 
         try {
 
@@ -3768,11 +5007,11 @@ app.post(
                 });
             }
 
-            const student = db.prepare(`
+            const student = await runtimeGet(`
                 SELECT id
                 FROM students
                 WHERE id = ?
-            `).get(numericStudentId);
+            `, [numericStudentId]);
 
             if (!student) {
                 return res.status(404).json({
@@ -3781,34 +5020,37 @@ app.post(
                 });
             }
 
-            const result = db.prepare(`
+            const result = await runtimeRun(`
                 INSERT INTO fees
                     (student_id, academic_year, fee_year, total_amount, paid_amount, pending_amount, status)
                 VALUES (?, ?, ?, ?, 0, ?, 'Pending')
-            `).run(
+                RETURNING id
+            `, [
                 numericStudentId,
                 academicYear.trim(),
                 numericFeeYear,
                 numericTotal,
                 numericTotal
-            );
+            ]);
 
-            db.prepare(`
+            const feeRecordId = result.lastInsertRowid ?? result.rows?.[0]?.id;
+
+            await runtimeRun(`
                 INSERT INTO audit_logs
                     (user_id, action, entity_type, entity_id, metadata)
                 VALUES (?, ?, ?, ?, ?)
-            `).run(
+            `, [
                 req.user.id,
                 "CREATE",
                 "fee",
-                result.lastInsertRowid,
+                feeRecordId,
                 JSON.stringify({ studentId: numericStudentId, academicYear, feeYear, totalAmount: numericTotal })
-            );
+            ]);
 
             return res.status(201).json({
                 status: "success",
                 message: "Fee record created",
-                fee_id: result.lastInsertRowid
+                fee_id: feeRecordId
             });
 
         } catch (error) {
@@ -3817,7 +5059,7 @@ app.post(
 
             return res.status(500).json({
                 status: "error",
-                message: error.message
+                message: "Unable to create fee record"
             });
 
         }
@@ -3828,15 +5070,15 @@ app.delete(
     "/api/admin/fees/:id",
     authenticateToken,
     requireAdmin,
-    (req, res) => {
+    async (req, res) => {
 
         try {
 
             const feeId = Number(req.params.id);
-            const result = db.prepare(`
+            const result = await runtimeRun(`
                 DELETE FROM fees
                 WHERE id = ?
-            `).run(feeId);
+            `, [feeId]);
 
             if (!result.changes) {
                 return res.status(404).json({
@@ -3845,11 +5087,11 @@ app.delete(
                 });
             }
 
-            db.prepare(`
+            await runtimeRun(`
                 INSERT INTO audit_logs
                     (user_id, action, entity_type, entity_id)
                 VALUES (?, ?, ?, ?)
-            `).run(req.user.id, "DELETE", "fee", feeId);
+            `, [req.user.id, "DELETE", "fee", feeId]);
 
             return res.json({
                 status: "success",
@@ -3862,7 +5104,7 @@ app.delete(
 
             return res.status(500).json({
                 status: "error",
-                message: error.message
+                message: "Unable to delete fee record"
             });
 
         }
@@ -3878,21 +5120,21 @@ app.get(
     "/api/admin/buses",
     authenticateToken,
     requireAdmin,
-    (req, res) => {
+    async (req, res) => {
 
         try {
 
-            const buses = db.prepare(`
+            const buses = await runtimeAll(`
                 SELECT *
                 FROM buses
                 ORDER BY id DESC
-            `).all();
+            `);
 
-            const stops = db.prepare(`
+            const stops = await runtimeAll(`
                 SELECT *
                 FROM bus_stops
                 ORDER BY bus_id, id
-            `).all();
+            `);
 
             return res.json({
                 status: "success",
@@ -3906,7 +5148,7 @@ app.get(
 
             return res.status(500).json({
                 status: "error",
-                message: error.message
+                message: "Unable to load buses"
             });
 
         }
@@ -3917,7 +5159,7 @@ app.post(
     "/api/admin/buses",
     authenticateToken,
     requireAdmin,
-    (req, res) => {
+    async (req, res) => {
 
         try {
 
@@ -3931,27 +5173,30 @@ app.post(
                 });
             }
 
-            const result = db.prepare(`
+            const result = await runtimeRun(`
                 INSERT INTO buses (bus_number, route)
                 VALUES (?, ?)
-            `).run(busNumber, routeName || null);
+                RETURNING id
+            `, [busNumber, routeName || null]);
 
-            db.prepare(`
+            const busRecordId = result.lastInsertRowid ?? result.rows?.[0]?.id;
+
+            await runtimeRun(`
                 INSERT INTO audit_logs
                     (user_id, action, entity_type, entity_id, metadata)
                 VALUES (?, ?, ?, ?, ?)
-            `).run(
+            `, [
                 req.user.id,
                 "CREATE",
                 "bus",
-                result.lastInsertRowid,
+                busRecordId,
                 JSON.stringify({ busNumber, routeName })
-            );
+            ]);
 
             return res.status(201).json({
                 status: "success",
                 message: "Bus created",
-                bus_id: result.lastInsertRowid
+                bus_id: busRecordId
             });
 
         } catch (error) {
@@ -3967,7 +5212,7 @@ app.post(
 
             return res.status(500).json({
                 status: "error",
-                message: error.message
+                message: "Unable to create bus"
             });
 
         }
@@ -3978,7 +5223,7 @@ app.post(
     "/api/admin/buses/:id/stops",
     authenticateToken,
     requireAdmin,
-    (req, res) => {
+    async (req, res) => {
 
         try {
 
@@ -3993,7 +5238,7 @@ app.post(
                 });
             }
 
-            const bus = db.prepare("SELECT id FROM buses WHERE id = ?").get(busId);
+            const bus = await runtimeGet("SELECT id FROM buses WHERE id = ?", [busId]);
             if (!bus) {
                 return res.status(404).json({
                     status: "error",
@@ -4001,15 +5246,16 @@ app.post(
                 });
             }
 
-            const result = db.prepare(`
+            const result = await runtimeRun(`
                 INSERT INTO bus_stops (bus_id, stop_name, pickup_time)
                 VALUES (?, ?, ?)
-            `).run(busId, stopName, pickupTime || null);
+                RETURNING id
+            `, [busId, stopName, pickupTime || null]);
 
             return res.status(201).json({
                 status: "success",
                 message: "Bus stop created",
-                stop_id: result.lastInsertRowid
+                stop_id: result.lastInsertRowid ?? result.rows?.[0]?.id
             });
 
         } catch (error) {
@@ -4018,7 +5264,7 @@ app.post(
 
             return res.status(500).json({
                 status: "error",
-                message: error.message
+                message: "Unable to create bus stop"
             });
 
         }
@@ -4029,12 +5275,12 @@ app.delete(
     "/api/admin/buses/:id",
     authenticateToken,
     requireAdmin,
-    (req, res) => {
+    async (req, res) => {
 
         try {
 
             const busId = Number(req.params.id);
-            const result = db.prepare("DELETE FROM buses WHERE id = ?").run(busId);
+            const result = await runtimeRun("DELETE FROM buses WHERE id = ?", [busId]);
 
             if (!result.changes) {
                 return res.status(404).json({
@@ -4043,10 +5289,10 @@ app.delete(
                 });
             }
 
-            db.prepare(`
+            await runtimeRun(`
                 INSERT INTO audit_logs (user_id, action, entity_type, entity_id)
                 VALUES (?, ?, ?, ?)
-            `).run(req.user.id, "DELETE", "bus", busId);
+            `, [req.user.id, "DELETE", "bus", busId]);
 
             return res.json({
                 status: "success",
@@ -4059,7 +5305,7 @@ app.delete(
 
             return res.status(500).json({
                 status: "error",
-                message: error.message
+                message: "Unable to delete bus"
             });
 
         }
@@ -4075,21 +5321,21 @@ app.get(
     "/api/admin/events",
     authenticateToken,
     requireAdmin,
-    (req, res) => {
+    async (req, res) => {
 
         try {
 
-            const events = db.prepare(`
+            const events = await runtimeAll(`
                 SELECT *
                 FROM events
                 ORDER BY event_date DESC, id DESC
-            `).all();
+            `);
 
-            const announcements = db.prepare(`
+            const announcements = await runtimeAll(`
                 SELECT *
                 FROM announcements
                 ORDER BY id DESC
-            `).all();
+            `);
 
             return res.json({
                 status: "success",
@@ -4103,7 +5349,7 @@ app.get(
 
             return res.status(500).json({
                 status: "error",
-                message: error.message
+                message: "Unable to load events"
             });
 
         }
@@ -4114,7 +5360,7 @@ app.post(
     "/api/admin/events",
     authenticateToken,
     requireAdmin,
-    (req, res) => {
+    async (req, res) => {
 
         try {
 
@@ -4133,11 +5379,12 @@ app.post(
                 });
             }
 
-            const result = db.prepare(`
+            const result = await runtimeRun(`
                 INSERT INTO events
                     (title, description, event_date, event_time, venue, category, audience, published)
                 VALUES (?, ?, ?, ?, ?, ?, ?, 0)
-            `).run(
+                RETURNING id
+            `, [
                 title,
                 description || null,
                 eventDate || null,
@@ -4145,17 +5392,19 @@ app.post(
                 venue || null,
                 category,
                 audience
-            );
+            ]);
 
-            db.prepare(`
+            const eventId = result.lastInsertRowid ?? result.rows?.[0]?.id;
+
+            await runtimeRun(`
                 INSERT INTO audit_logs (user_id, action, entity_type, entity_id, metadata)
                 VALUES (?, ?, ?, ?, ?)
-            `).run(req.user.id, "CREATE", "event", result.lastInsertRowid, JSON.stringify({ title }));
+            `, [req.user.id, "CREATE", "event", eventId, JSON.stringify({ title })]);
 
             return res.status(201).json({
                 status: "success",
                 message: "Event created",
-                event_id: result.lastInsertRowid
+                event_id: eventId
             });
 
         } catch (error) {
@@ -4164,7 +5413,7 @@ app.post(
 
             return res.status(500).json({
                 status: "error",
-                message: error.message
+                message: "Unable to create event"
             });
 
         }
@@ -4175,17 +5424,17 @@ app.patch(
     "/api/admin/events/:id/publish",
     authenticateToken,
     requireAdmin,
-    (req, res) => {
+    async (req, res) => {
 
         try {
 
             const eventId = Number(req.params.id);
             const published = req.body.published ? 1 : 0;
-            const result = db.prepare(`
+            const result = await runtimeRun(`
                 UPDATE events
                 SET published = ?
                 WHERE id = ?
-            `).run(published, eventId);
+            `, [published, eventId]);
 
             if (!result.changes) {
                 return res.status(404).json({
@@ -4205,7 +5454,7 @@ app.patch(
 
             return res.status(500).json({
                 status: "error",
-                message: error.message
+                message: "Unable to update event publication"
             });
 
         }
@@ -4216,12 +5465,12 @@ app.delete(
     "/api/admin/events/:id",
     authenticateToken,
     requireAdmin,
-    (req, res) => {
+    async (req, res) => {
 
         try {
 
             const eventId = Number(req.params.id);
-            const result = db.prepare("DELETE FROM events WHERE id = ?").run(eventId);
+            const result = await runtimeRun("DELETE FROM events WHERE id = ?", [eventId]);
 
             if (!result.changes) {
                 return res.status(404).json({
@@ -4230,10 +5479,10 @@ app.delete(
                 });
             }
 
-            db.prepare(`
+            await runtimeRun(`
                 INSERT INTO audit_logs (user_id, action, entity_type, entity_id)
                 VALUES (?, ?, ?, ?)
-            `).run(req.user.id, "DELETE", "event", eventId);
+            `, [req.user.id, "DELETE", "event", eventId]);
 
             return res.json({
                 status: "success",
@@ -4246,7 +5495,7 @@ app.delete(
 
             return res.status(500).json({
                 status: "error",
-                message: error.message
+                message: "Unable to delete event"
             });
 
         }
@@ -4257,7 +5506,7 @@ app.post(
     "/api/admin/announcements",
     authenticateToken,
     requireAdmin,
-    (req, res) => {
+    async (req, res) => {
 
         try {
 
@@ -4272,15 +5521,16 @@ app.post(
                 });
             }
 
-            const result = db.prepare(`
+            const result = await runtimeRun(`
                 INSERT INTO announcements (title, description, audience, published)
                 VALUES (?, ?, ?, 0)
-            `).run(title, description || null, audience);
+                RETURNING id
+            `, [title, description || null, audience]);
 
             return res.status(201).json({
                 status: "success",
                 message: "Announcement created",
-                announcement_id: result.lastInsertRowid
+                announcement_id: result.lastInsertRowid ?? result.rows?.[0]?.id
             });
 
         } catch (error) {
@@ -4289,7 +5539,7 @@ app.post(
 
             return res.status(500).json({
                 status: "error",
-                message: error.message
+                message: "Unable to create announcement"
             });
 
         }
@@ -4305,18 +5555,18 @@ app.get(
     "/api/admin/stats",
     authenticateToken,
     requireAdmin,
-    (req, res) => {
+    async (req, res) => {
 
         try {
 
-            const counts = db.prepare(`
+            const counts = await runtimeGet(`
                 SELECT
                     (SELECT COUNT(*) FROM students) AS students,
                     (SELECT COUNT(*) FROM faculty) AS faculty,
                     (SELECT COUNT(*) FROM notifications) AS notifications,
                     (SELECT COUNT(*) FROM events) AS events,
                     (SELECT COUNT(*) FROM fees) AS fees
-            `).get();
+            `);
 
             return res.json({
                 status: "success",
@@ -4335,7 +5585,7 @@ app.get(
 
             return res.status(500).json({
                 status: "error",
-                message: error.message
+                message: "Unable to load statistics"
             });
 
         }
@@ -4347,9 +5597,9 @@ app.get(
     "/api/admin/reports",
     authenticateToken,
     requireAdmin,
-    (req, res) => {
+    async (req, res) => {
         try {
-            const summary = db.prepare(`
+            const summary = await runtimeGet(`
                 SELECT
                     (SELECT COUNT(*) FROM students) AS students,
                     (SELECT COUNT(*) FROM faculty) AS faculty,
@@ -4361,33 +5611,33 @@ app.get(
                     (SELECT COUNT(*) FROM attendance WHERE status = 'Present') AS attendance_present,
                     (SELECT COUNT(*) FROM attendance WHERE status = 'Absent') AS attendance_absent,
                     (SELECT COUNT(*) FROM attendance WHERE status = 'Leave') AS attendance_leave
-            `).get();
+            `);
 
-            const departmentBreakdown = db.prepare(`
+            const departmentBreakdown = await runtimeAll(`
                 SELECT department,
                        COUNT(*) AS total_students
                 FROM students
                 WHERE department IS NOT NULL AND TRIM(department) != ''
                 GROUP BY department
                 ORDER BY total_students DESC, department ASC
-            `).all();
+            `);
 
-            const feeStatusBreakdown = db.prepare(`
+            const feeStatusBreakdown = await runtimeAll(`
                 SELECT status,
                        COUNT(*) AS total_records
                 FROM fees
                 GROUP BY status
                 ORDER BY total_records DESC, status ASC
-            `).all();
+            `);
 
-            const recentAnnouncements = db.prepare(`
+            const recentAnnouncements = await runtimeAll(`
                 SELECT title,
                        message,
                        created_at
                 FROM notifications
                 ORDER BY created_at DESC
                 LIMIT 5
-            `).all();
+            `);
 
             return res.json({
                 status: "success",
@@ -4412,7 +5662,7 @@ app.get(
             console.error("Admin reports error:", error);
             return res.status(500).json({
                 status: "error",
-                message: error.message
+                message: "Unable to load reports"
             });
         }
     }
@@ -4427,59 +5677,36 @@ app.get(
     "/api/student/profile",
     authenticateToken,
     requireStudent,
-    (req, res) => {
+    async (req, res) => {
 
         try {
 
-            const student =
-                db.prepare(`
-                    SELECT
-                        *
-                    FROM students
-                    WHERE user_id = ?
-                `).get(req.user.id);
-
+            let student;
+            if (parentFamily.isPostgresConfigured()) student = await postgres.get(`
+                SELECT *
+                FROM students
+                WHERE user_id = ?
+            `, [req.user.id]);
+            else student = db.prepare("SELECT * FROM students WHERE user_id = ?").get(req.user.id);
 
             if (!student) {
-
                 return res.status(404).json({
-
                     status: "error",
-
-                    message:
-                        "Student profile not found"
-
+                    message: "Student profile not found"
                 });
-
             }
 
-
             return res.json({
-
                 status: "success",
-
                 student
-
             });
-
 
         } catch (error) {
-
-            console.error(
-                "Profile error:",
-                error
-            );
-
-
+            console.error("Profile error:", error);
             return res.status(500).json({
-
                 status: "error",
-
-                message:
-                    "Unable to load profile"
-
+                message: "Unable to load profile"
             });
-
         }
 
     }
@@ -4489,15 +5716,17 @@ app.patch(
     "/api/student/profile",
     authenticateToken,
     requireStudent,
-    (req, res) => {
+    async (req, res) => {
 
         try {
 
-            const student = db.prepare(`
+            const student = parentFamily.isPostgresConfigured()
+                ? await postgres.get(`
                 SELECT *
                 FROM students
                 WHERE user_id = ?
-            `).get(req.user.id);
+            `, [req.user.id])
+                : db.prepare("SELECT * FROM students WHERE user_id = ?").get(req.user.id);
 
             if (!student) {
                 return res.status(404).json({
@@ -4562,37 +5791,32 @@ app.patch(
                 });
             }
 
-            const sql = [
-                "UPDATE students SET"
-            ];
+            const setClauses = [];
             const params = [];
 
-            Object.entries(updates).forEach(([field, value], index) => {
-                sql.push(`${field} = ?` + (index < Object.keys(updates).length - 1 ? "," : ""));
+            Object.entries(updates).forEach(([field, value]) => {
+                setClauses.push(`${field} = ?`);
                 params.push(value);
             });
 
-            sql.push("WHERE user_id = ?");
             params.push(req.user.id);
 
-            db.prepare(sql.join(" ")).run(...params);
-
-            db.prepare(`
-                INSERT INTO audit_logs (user_id, action, entity_type, entity_id, metadata)
-                VALUES (?, ?, ?, ?, ?)
-            `).run(
-                req.user.id,
-                "UPDATE_PROFILE",
-                "student",
-                student.id,
-                JSON.stringify({ updatedFields: Object.keys(updates) })
-            );
-
-            const updatedStudent = db.prepare(`
-                SELECT *
-                FROM students
-                WHERE user_id = ?
-            `).get(req.user.id);
+            let updatedStudent;
+            if (parentFamily.isPostgresConfigured()) {
+                await postgres.run(`UPDATE students SET ${setClauses.join(", ")} WHERE user_id = ?`, params);
+                await postgres.run(`
+                    INSERT INTO audit_logs (user_id, action, entity_type, entity_id, metadata)
+                    VALUES (?, ?, ?, ?, ?)
+                `, [req.user.id, "UPDATE_PROFILE", "student", student.id, JSON.stringify({ updatedFields: Object.keys(updates) })]);
+                updatedStudent = await postgres.get("SELECT * FROM students WHERE user_id = ?", [req.user.id]);
+            } else {
+                db.prepare(`UPDATE students SET ${setClauses.join(", ")} WHERE user_id = ?`).run(...params);
+                db.prepare(`
+                    INSERT INTO audit_logs (user_id, action, entity_type, entity_id, metadata)
+                    VALUES (?, ?, ?, ?, ?)
+                `).run(req.user.id, "UPDATE_PROFILE", "student", student.id, JSON.stringify({ updatedFields: Object.keys(updates) }));
+                updatedStudent = db.prepare("SELECT * FROM students WHERE user_id = ?").get(req.user.id);
+            }
 
             return res.json({
                 status: "success",
@@ -4604,7 +5828,7 @@ app.patch(
             console.error("Profile update error:", error);
             return res.status(500).json({
                 status: "error",
-                message: error.message || "Unable to update profile"
+                message: "Unable to update profile"
             });
         }
     }
@@ -4619,15 +5843,17 @@ app.get(
     "/api/student/academics",
     authenticateToken,
     requireStudent,
-    (req, res) => {
+    async (req, res) => {
 
         try {
 
-            const student = db.prepare(`
+            let student;
+            if (parentFamily.isPostgresConfigured()) student = await postgres.get(`
                 SELECT id, department, year, section
                 FROM students
                 WHERE user_id = ?
-            `).get(req.user.id);
+            `, [req.user.id]);
+            else student = db.prepare("SELECT id, department, year, section FROM students WHERE user_id = ?").get(req.user.id);
 
             if (!student) {
                 return res.status(404).json({
@@ -4636,14 +5862,23 @@ app.get(
                 });
             }
 
-            const subjects = db.prepare(`
+            let subjects;
+            if (parentFamily.isPostgresConfigured()) subjects = await postgres.all(`
                 SELECT id, code, name, department, year, semester, section
                 FROM subjects
                 WHERE (department IS NULL OR department = ?)
                   AND (year IS NULL OR year = ?)
                   AND (section IS NULL OR section = ?)
                 ORDER BY semester, code, name
-            `).all(student.department, student.year, student.section);
+            `, [student.department, student.year, student.section]);
+            else subjects = db.prepare(`
+                                        SELECT id, code, name, department, year, semester, section
+                                        FROM subjects
+                                        WHERE (department IS NULL OR department = ?)
+                                            AND (year IS NULL OR year = ?)
+                                            AND (section IS NULL OR section = ?)
+                                        ORDER BY semester, code, name
+                                `).all(student.department, student.year, student.section);
 
             return res.json({
                 status: "success",
@@ -4651,14 +5886,11 @@ app.get(
             });
 
         } catch (error) {
-
             console.error("Student academics error:", error);
-
             return res.status(500).json({
                 status: "error",
-                message: error.message
+                message: "Unable to load academic records"
             });
-
         }
     }
 );
@@ -4667,15 +5899,15 @@ app.get(
     "/api/student/fees",
     authenticateToken,
     requireStudent,
-    (req, res) => {
+    async (req, res) => {
 
         try {
 
-            const student = db.prepare(`
+            const student = await runtimeGet(`
                 SELECT id, year
                 FROM students
                 WHERE user_id = ?
-            `).get(req.user.id);
+            `, [req.user.id]);
 
             if (!student) {
                 return res.status(404).json({
@@ -4684,19 +5916,19 @@ app.get(
                 });
             }
 
-            const fees = db.prepare(`
+            const fees = await runtimeAll(`
                 SELECT *
                 FROM fees
                 WHERE student_id = ?
                 ORDER BY fee_year DESC, id DESC
-            `).all(student.id);
+            `, [student.id]);
 
-            const payments = db.prepare(`
+            const payments = await runtimeAll(`
                 SELECT *
                 FROM fee_payments
                 WHERE student_id = ?
                 ORDER BY payment_date DESC, id DESC
-            `).all(student.id);
+            `, [student.id]);
 
             return res.json({
                 status: "success",
@@ -4718,7 +5950,7 @@ app.get(
 
             return res.status(500).json({
                 status: "error",
-                message: error.message
+                message: "Unable to load bus information"
             });
 
         }
@@ -4729,13 +5961,13 @@ app.post(
     "/api/student/fees/pay",
     authenticateToken,
     requireStudent,
-    (req, res) => {
+    async (req, res) => {
         try {
-            const student = db.prepare(`
+            const student = await runtimeGet(`
                 SELECT id, year
                 FROM students
                 WHERE user_id = ?
-            `).get(req.user.id);
+            `, [req.user.id]);
 
             if (!student) {
                 return res.status(404).json({
@@ -4763,11 +5995,11 @@ app.post(
                 });
             }
 
-            const fee = db.prepare(`
+            const fee = await runtimeGet(`
                 SELECT *
                 FROM fees
                 WHERE id = ? AND student_id = ?
-            `).get(feeId, student.id);
+            `, [feeId, student.id]);
 
             if (!fee) {
                 return res.status(404).json({
@@ -4784,11 +6016,11 @@ app.post(
                 });
             }
 
-            const previousYears = db.prepare(`
+            const previousYears = await runtimeAll(`
                 SELECT fee_year, pending_amount, status
                 FROM fees
                 WHERE student_id = ? AND fee_year < ?
-            `).all(student.id, fee.fee_year);
+            `, [student.id, fee.fee_year]);
             const previousYearComplete = Array.from(
                 { length: Math.max(0, Number(fee.fee_year) - 1) },
                 (_, index) => index + 1
@@ -4819,23 +6051,41 @@ app.post(
             const nextPending = Math.max(Number(fee.total_amount || 0) - nextPaid, 0);
             const nextStatus = nextPending > 0 ? "Pending" : "Paid";
 
-            db.prepare(`
-                INSERT INTO fee_payments
-                    (student_id, amount, payment_mode, transaction_id, payment_reference, payment_date)
-                VALUES (?, ?, ?, ?, ?, datetime('now'))
-            `).run(student.id, amount, method, transactionId, `fee_${feeId}`);
+            if (usePostgresRuntime) {
+                await postgres.transaction(async transaction => {
+                    await transaction.run(`
+                        INSERT INTO fee_payments
+                            (student_id, amount, payment_mode, transaction_id, payment_reference, payment_date)
+                        VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                        RETURNING id
+                    `, [student.id, amount, method, transactionId, `fee_${feeId}`]);
 
-            db.prepare(`
-                UPDATE fees
-                SET paid_amount = ?, pending_amount = ?, status = ?
-                WHERE id = ?
-            `).run(nextPaid, nextPending, nextStatus, feeId);
+                    await transaction.run(`
+                        UPDATE fees
+                        SET paid_amount = ?, pending_amount = ?, status = ?
+                        WHERE id = ?
+                    `, [nextPaid, nextPending, nextStatus, feeId]);
+                });
+            } else {
+                db.transaction(() => {
+                    db.prepare(`
+                        INSERT INTO fee_payments
+                            (student_id, amount, payment_mode, transaction_id, payment_reference, payment_date)
+                        VALUES (?, ?, ?, ?, ?, datetime('now'))
+                    `).run(student.id, amount, method, transactionId, `fee_${feeId}`);
+                    db.prepare(`
+                        UPDATE fees
+                        SET paid_amount = ?, pending_amount = ?, status = ?
+                        WHERE id = ?
+                    `).run(nextPaid, nextPending, nextStatus, feeId);
+                })();
+            }
 
-            db.prepare(`
+            await runtimeRun(`
                 INSERT INTO audit_logs
                     (user_id, action, entity_type, entity_id, metadata)
                 VALUES (?, ?, ?, ?, ?)
-            `).run(
+            `, [
                 req.user.id,
                 "PAYMENT",
                 "fee",
@@ -4847,7 +6097,7 @@ app.post(
                     transaction_id: transactionId,
                     paid_at: new Date().toISOString()
                 })
-            );
+            ]);
 
             return res.status(201).json({
                 status: "success",
@@ -4866,7 +6116,7 @@ app.post(
             console.error("Student fee payment error:", error);
             return res.status(500).json({
                 status: "error",
-                message: error.message
+                message: "Unable to process fee payment"
             });
         }
     }
@@ -4876,11 +6126,11 @@ app.get(
     "/api/student/bus",
     authenticateToken,
     requireStudent,
-    (req, res) => {
+    async (req, res) => {
 
         try {
 
-            const assignment = db.prepare(`
+            const assignment = await runtimeGet(`
                 SELECT
                     a.*,
                     b.bus_number,
@@ -4895,7 +6145,7 @@ app.get(
                 WHERE st.user_id = ?
                 ORDER BY a.id DESC
                 LIMIT 1
-            `).get(req.user.id);
+            `, [req.user.id]);
 
             return res.json({
                 status: "success",
@@ -4908,7 +6158,7 @@ app.get(
 
             return res.status(500).json({
                 status: "error",
-                message: error.message
+                message: "Unable to load assignments"
             });
 
         }
@@ -4919,7 +6169,7 @@ app.get(
     "/api/student/assignments",
     authenticateToken,
     requireStudent,
-    (req, res) => {
+    async (req, res) => {
 
         try {
             const { page, limit, offset } = getPagination(req);
@@ -4927,7 +6177,7 @@ app.get(
             const searchSql = search ? "AND (a.title LIKE ? OR a.description LIKE ? OR s.name LIKE ?)" : "";
             const searchParams = search ? [`%${search}%`, `%${search}%`, `%${search}%`] : [];
 
-            const assignments = db.prepare(`
+            const assignments = await runtimeAll(`
                 SELECT
                     a.id,
                     a.title,
@@ -4950,7 +6200,7 @@ app.get(
                 ${searchSql}
                 ORDER BY a.deadline, a.id DESC
                 LIMIT ? OFFSET ?
-            `).all(req.user.id, req.user.id, req.user.id, req.user.id, ...searchParams, limit, offset);
+            `, [req.user.id, req.user.id, req.user.id, req.user.id, ...searchParams, limit, offset]);
 
             return res.json({
                 status: "success",
@@ -4964,7 +6214,7 @@ app.get(
 
             return res.status(500).json({
                 status: "error",
-                message: error.message
+                message: "Unable to load documents"
             });
 
         }
@@ -4975,7 +6225,7 @@ app.get(
     "/api/student/documents",
     authenticateToken,
     requireStudent,
-    (req, res) => {
+    async (req, res) => {
 
         try {
             const { page, limit, offset } = getPagination(req);
@@ -4983,7 +6233,7 @@ app.get(
             const searchSql = search ? "AND (title LIKE ? OR category LIKE ?)" : "";
             const searchParams = search ? [`%${search}%`, `%${search}%`] : [];
 
-            const documents = db.prepare(`
+            const documents = await runtimeAll(`
                 SELECT
                     id,
                     title AS document_name,
@@ -4996,7 +6246,7 @@ app.get(
                 ${searchSql}
                 ORDER BY created_at DESC, id DESC
                 LIMIT ? OFFSET ?
-            `).all(req.user.id, ...searchParams, limit, offset);
+            `, [req.user.id, ...searchParams, limit, offset]);
 
             return res.json({
                 status: "success",
@@ -5010,7 +6260,7 @@ app.get(
 
             return res.status(500).json({
                 status: "error",
-                message: error.message
+                message: "Unable to load exams"
             });
 
         }
@@ -5021,17 +6271,17 @@ app.get(
     "/api/student/placements",
     authenticateToken,
     requireStudent,
-    (req, res) => {
+    async (req, res) => {
 
         try {
 
-            const student = db.prepare(`
+            const student = await runtimeGet(`
                 SELECT id
                 FROM students
                 WHERE user_id = ?
-            `).get(req.user.id);
+            `, [req.user.id]);
 
-            const drives = db.prepare(`
+            const drives = await runtimeAll(`
                 SELECT
                     d.*,
                     p.status AS application_status,
@@ -5042,7 +6292,7 @@ app.get(
                     AND p.student_id = ?
                 WHERE d.status = 'Open'
                 ORDER BY d.drive_date, d.id DESC
-            `).all(student?.id || 0);
+            `, [student?.id || 0]);
 
             return res.json({
                 status: "success",
@@ -5055,7 +6305,7 @@ app.get(
 
             return res.status(500).json({
                 status: "error",
-                message: error.message
+                message: "Unable to load placement drives"
             });
 
         }
@@ -5066,16 +6316,16 @@ app.get(
     "/api/student/internships",
     authenticateToken,
     requireStudent,
-    (req, res) => {
+    async (req, res) => {
 
         try {
 
-            const internships = db.prepare(`
+            const internships = await runtimeAll(`
                 SELECT *
                 FROM internships
                 WHERE status = 'Open'
                 ORDER BY application_deadline, id DESC
-            `).all();
+            `);
 
             return res.json({
                 status: "success",
@@ -5088,7 +6338,7 @@ app.get(
 
             return res.status(500).json({
                 status: "error",
-                message: error.message
+                message: "Unable to load internships"
             });
 
         }
@@ -5099,15 +6349,15 @@ app.get(
     "/api/student/materials",
     authenticateToken,
     requireStudent,
-    (req, res) => {
+    async (req, res) => {
 
         try {
 
-            const student = db.prepare(`
+            const student = await runtimeGet(`
                 SELECT department, year, section
                 FROM students
                 WHERE user_id = ?
-            `).get(req.user.id);
+            `, [req.user.id]);
 
             if (!student) {
                 return res.status(404).json({
@@ -5116,14 +6366,14 @@ app.get(
                 });
             }
 
-            const materials = db.prepare(`
+            const materials = await runtimeAll(`
                 SELECT *
                 FROM study_materials
                 WHERE (department IS NULL OR department = ?)
                   AND (year IS NULL OR year = ?)
                   AND (section IS NULL OR section = ?)
                 ORDER BY created_at DESC, id DESC
-            `).all(student.department, student.year, student.section);
+            `, [student.department, student.year, student.section]);
 
             return res.json({
                 status: "success",
@@ -5136,7 +6386,7 @@ app.get(
 
             return res.status(500).json({
                 status: "error",
-                message: error.message
+                message: "Unable to load attendance"
             });
 
         }
@@ -5147,7 +6397,7 @@ app.post(
     "/api/admin/materials",
     authenticateToken,
     requireAdmin,
-    (req, res) => {
+    async (req, res) => {
 
         try {
 
@@ -5167,11 +6417,12 @@ app.post(
                 });
             }
 
-            const result = db.prepare(`
+            const result = await runtimeRun(`
                 INSERT INTO study_materials
                     (title, description, material_type, file_url, subject, department, year, section, uploaded_by)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            `).run(
+                RETURNING id
+            `, [
                 title,
                 description || null,
                 materialType,
@@ -5181,11 +6432,11 @@ app.post(
                 year,
                 section || null,
                 req.user.id
-            );
+            ]);
 
             return res.status(201).json({
                 status: "success",
-                material_id: result.lastInsertRowid
+                material_id: result.lastInsertRowid ?? result.rows?.[0]?.id
             });
 
         } catch (error) {
@@ -5194,7 +6445,7 @@ app.post(
 
             return res.status(500).json({
                 status: "error",
-                message: error.message
+                message: "Unable to create study material"
             });
 
         }
@@ -5205,11 +6456,11 @@ app.get(
     "/api/student/leave-requests",
     authenticateToken,
     requireStudent,
-    (req, res) => {
+    async (req, res) => {
 
         try {
 
-            const requests = db.prepare(`
+            const requests = await runtimeAll(`
                 SELECT
                     lr.id,
                     lr.starts_on,
@@ -5223,7 +6474,7 @@ app.get(
                 JOIN students s ON s.id = lr.student_id
                 WHERE s.user_id = ?
                 ORDER BY lr.created_at DESC, lr.id DESC
-            `).all(req.user.id);
+            `, [req.user.id]);
 
             return res.json({
                 status: "success",
@@ -5236,7 +6487,7 @@ app.get(
 
             return res.status(500).json({
                 status: "error",
-                message: error.message
+                message: "Unable to load leave requests"
             });
 
         }
@@ -5247,7 +6498,7 @@ app.post(
     "/api/student/leave-requests",
     authenticateToken,
     requireStudent,
-    (req, res) => {
+    async (req, res) => {
 
         try {
 
@@ -5262,11 +6513,11 @@ app.post(
                 });
             }
 
-            const student = db.prepare(`
+            const student = await runtimeGet(`
                 SELECT id
                 FROM students
                 WHERE user_id = ?
-            `).get(req.user.id);
+            `, [req.user.id]);
 
             if (!student) {
                 return res.status(404).json({
@@ -5275,15 +6526,21 @@ app.post(
                 });
             }
 
-            const result = db.prepare(`
-                INSERT INTO leave_requests (student_id, starts_on, ends_on, reason, status)
-                VALUES (?, ?, ?, ?, 'Pending')
-            `).run(student.id, startsOn, endsOn, reason);
+            const result = usePostgresRuntime
+                ? await postgres.run(`
+                    INSERT INTO leave_requests (student_id, starts_on, ends_on, reason, status)
+                    VALUES (?, ?, ?, ?, 'Pending')
+                    RETURNING id
+                `, [student.id, startsOn, endsOn, reason])
+                : db.prepare(`
+                    INSERT INTO leave_requests (student_id, starts_on, ends_on, reason, status)
+                    VALUES (?, ?, ?, ?, 'Pending')
+                `).run(student.id, startsOn, endsOn, reason);
 
             return res.status(201).json({
                 status: "success",
                 message: "Leave request submitted",
-                request_id: result.lastInsertRowid
+                request_id: result.lastInsertRowid ?? result.rows?.[0]?.id
             });
 
         } catch (error) {
@@ -5292,7 +6549,7 @@ app.post(
 
             return res.status(500).json({
                 status: "error",
-                message: error.message
+                message: "Unable to submit leave request"
             });
 
         }
@@ -5303,11 +6560,11 @@ app.get(
     "/api/admin/leave-requests",
     authenticateToken,
     requireAdmin,
-    (req, res) => {
+    async (req, res) => {
 
         try {
 
-            const requests = db.prepare(`
+            const requests = await runtimeAll(`
                 SELECT
                     lr.*,
                     s.full_name,
@@ -5318,7 +6575,7 @@ app.get(
                 FROM leave_requests lr
                 LEFT JOIN students s ON s.id = lr.student_id
                 ORDER BY lr.created_at DESC, lr.id DESC
-            `).all();
+            `);
 
             return res.json({
                 status: "success",
@@ -5331,7 +6588,7 @@ app.get(
 
             return res.status(500).json({
                 status: "error",
-                message: error.message
+                message: "Unable to load leave requests"
             });
 
         }
@@ -5342,7 +6599,7 @@ app.patch(
     "/api/admin/leave-requests/:id/review",
     authenticateToken,
     requireAdmin,
-    (req, res) => {
+    async (req, res) => {
 
         try {
 
@@ -5357,11 +6614,11 @@ app.patch(
                 });
             }
 
-            const result = db.prepare(`
+            const result = await runtimeRun(`
                 UPDATE leave_requests
                 SET status = ?, reviewer_remarks = ?, reviewed_by = ?, reviewed_at = CURRENT_TIMESTAMP
                 WHERE id = ?
-            `).run(status, response || null, req.user.id, requestId);
+            `, [status, response || null, req.user.id, requestId]);
 
             if (!result.changes) {
                 return res.status(404).json({
@@ -5370,10 +6627,10 @@ app.patch(
                 });
             }
 
-            db.prepare(`
+            await runtimeRun(`
                 INSERT INTO audit_logs (user_id, action, entity_type, entity_id, metadata)
                 VALUES (?, ?, ?, ?, ?)
-            `).run(req.user.id, "REVIEW", "leave_request", requestId, JSON.stringify({ status }));
+            `, [req.user.id, "REVIEW", "leave_request", requestId, JSON.stringify({ status })]);
 
             return res.json({
                 status: "success",
@@ -5386,7 +6643,7 @@ app.patch(
 
             return res.status(500).json({
                 status: "error",
-                message: error.message
+                message: "Unable to review leave request"
             });
 
         }
@@ -5397,15 +6654,15 @@ app.get(
     "/api/student/exams",
     authenticateToken,
     requireStudent,
-    (req, res) => {
+    async (req, res) => {
 
         try {
 
-            const student = db.prepare(`
+            const student = await runtimeGet(`
                 SELECT id
                 FROM students
                 WHERE user_id = ?
-            `).get(req.user.id);
+            `, [req.user.id]);
 
             if (!student) {
                 return res.status(404).json({
@@ -5414,7 +6671,7 @@ app.get(
                 });
             }
 
-            const results = db.prepare(`
+            const results = await runtimeAll(`
                 SELECT
                     m.id,
                     m.exam_type,
@@ -5427,7 +6684,7 @@ app.get(
                 LEFT JOIN subjects s ON s.id = m.subject_id
                 WHERE m.student_id = ?
                 ORDER BY m.exam_date DESC, m.id DESC
-            `).all(student.id);
+            `, [student.id]);
 
             return res.json({
                 status: "success",
@@ -5440,7 +6697,7 @@ app.get(
 
             return res.status(500).json({
                 status: "error",
-                message: error.message
+                message: "Unable to load marks"
             });
 
         }
@@ -5451,15 +6708,15 @@ app.get(
     "/api/student/attendance",
     authenticateToken,
     requireStudent,
-    (req, res) => {
+    async (req, res) => {
 
         try {
 
-            const student = db.prepare(`
+            const student = await runtimeGet(`
                 SELECT id
                 FROM students
                 WHERE user_id = ?
-            `).get(req.user.id);
+            `, [req.user.id]);
 
             if (!student) {
                 return res.status(404).json({
@@ -5468,7 +6725,7 @@ app.get(
                 });
             }
 
-            const subjectWise = db.prepare(`
+            const subjectWise = (await runtimeAll(`
                 SELECT
                     subject,
                     COUNT(*) AS conducted,
@@ -5478,21 +6735,21 @@ app.get(
                 WHERE student_id = ?
                 GROUP BY subject
                 ORDER BY subject
-            `).all(student.id).map(item => ({
+            `, [student.id])).map(item => ({
                 ...item,
                 percentage: item.conducted
                     ? Number(((item.present / item.conducted) * 100).toFixed(2))
                     : 0
             }));
 
-            const summary = db.prepare(`
+            const summary = await runtimeGet(`
                 SELECT
                     COUNT(*) AS conducted,
                     SUM(CASE WHEN status = 'Present' THEN 1 ELSE 0 END) AS present,
                     SUM(CASE WHEN status = 'Absent' THEN 1 ELSE 0 END) AS absent
                 FROM attendance
                 WHERE student_id = ?
-            `).get(student.id);
+            `, [student.id]);
 
             return res.json({
                 status: "success",
@@ -5513,7 +6770,7 @@ app.get(
 
             return res.status(500).json({
                 status: "error",
-                message: error.message
+                message: "Unable to load notifications"
             });
 
         }
@@ -5524,16 +6781,16 @@ app.get(
     "/api/student/marks",
     authenticateToken,
     requireStudent,
-    (req, res) => {
+    async (req, res) => {
 
         try {
             const { page, limit, offset } = getPagination(req);
 
-            const student = db.prepare(`
+            const student = await runtimeGet(`
                 SELECT id
                 FROM students
                 WHERE user_id = ?
-            `).get(req.user.id);
+            `, [req.user.id]);
 
             if (!student) {
                 return res.status(404).json({
@@ -5542,7 +6799,7 @@ app.get(
                 });
             }
 
-            const marks = db.prepare(`
+            const marks = await runtimeAll(`
                 SELECT
                     m.id,
                     m.exam_type,
@@ -5556,7 +6813,7 @@ app.get(
                 WHERE m.student_id = ?
                 ORDER BY m.exam_date DESC, m.id DESC
                 LIMIT ? OFFSET ?
-            `).all(student.id, limit, offset);
+            `, [student.id, limit, offset]);
 
             return res.json({
                 status: "success",
@@ -5570,7 +6827,7 @@ app.get(
 
             return res.status(500).json({
                 status: "error",
-                message: error.message
+                message: "Unable to load marks"
             });
 
         }
@@ -5586,7 +6843,7 @@ app.get(
     "/api/student/notifications",
     authenticateToken,
     requireStudent,
-    (req, res) => {
+    async (req, res) => {
 
         try {
             const { page, limit, offset } = getPagination(req);
@@ -5594,11 +6851,11 @@ app.get(
             const searchSql = search ? "AND (n.title LIKE ? OR n.message LIKE ?)" : "";
             const searchParams = search ? [`%${search}%`, `%${search}%`] : [];
 
-            const student = db.prepare(`
+            const student = await runtimeGet(`
                 SELECT *
                 FROM students
                 WHERE user_id = ?
-            `).get(req.user.id);
+            `, [req.user.id]);
 
             if (!student) {
                 return res.status(404).json({
@@ -5607,7 +6864,7 @@ app.get(
                 });
             }
 
-            const notifications = db.prepare(`
+            const notifications = await runtimeAll(`
                 SELECT
                     n.id,
                     n.title,
@@ -5638,7 +6895,7 @@ app.get(
                 ${searchSql}
                 ORDER BY n.created_at DESC
                 LIMIT ? OFFSET ?
-            `).all(
+            `, [
                 student.id,
                 student.department,
                 student.year,
@@ -5652,7 +6909,7 @@ app.get(
                 ...searchParams,
                 limit,
                 offset
-            );
+            ]);
 
             return res.json({
                 status: "success",
@@ -5666,7 +6923,7 @@ app.get(
             console.error("Student notifications error:", error);
             return res.status(500).json({
                 status: "error",
-                message: error.message
+                message: "Unable to load notifications"
             });
         }
     }
@@ -5676,15 +6933,15 @@ app.get(
     "/api/student/notifications/unread-count",
     authenticateToken,
     requireStudent,
-    (req, res) => {
+    async (req, res) => {
 
         try {
 
-            const student = db.prepare(`
+            const student = await runtimeGet(`
                 SELECT *
                 FROM students
                 WHERE user_id = ?
-            `).get(req.user.id);
+            `, [req.user.id]);
 
             if (!student) {
                 return res.status(404).json({
@@ -5693,7 +6950,7 @@ app.get(
                 });
             }
 
-            const result = db.prepare(`
+            const result = await runtimeGet(`
                 SELECT COUNT(*) AS unread_count
                 FROM notifications n
                 LEFT JOIN notification_reads nr
@@ -5710,7 +6967,7 @@ app.get(
                     OR (n.audience = 'Branch + Section' AND n.branch = ? AND n.section = ?)
                     OR (n.audience = 'Year + Section' AND n.year = ? AND n.section = ?)
                   )
-            `).get(
+            `, [
                 student.id,
                 student.department,
                 student.year,
@@ -5721,7 +6978,7 @@ app.get(
                 student.section,
                 student.year,
                 student.section
-            );
+            ]);
 
             return res.json({
                 status: "success",
@@ -5732,7 +6989,7 @@ app.get(
             console.error("Unread Count Error:", error);
             return res.status(500).json({
                 status: "error",
-                message: error.message
+                message: "Unable to load notification count"
             });
         }
     }
@@ -5742,16 +6999,16 @@ app.patch(
     "/api/student/notifications/:id/read",
     authenticateToken,
     requireStudent,
-    (req, res) => {
+    async (req, res) => {
 
         try {
 
             const notificationId = Number(req.params.id);
-            const student = db.prepare(`
+            const student = await runtimeGet(`
                 SELECT id
                 FROM students
                 WHERE user_id = ?
-            `).get(req.user.id);
+            `, [req.user.id]);
 
             if (!student) {
                 return res.status(404).json({
@@ -5760,18 +7017,18 @@ app.patch(
                 });
             }
 
-            const existing = db.prepare(`
+            const existing = await runtimeGet(`
                 SELECT id
                 FROM notification_reads
                 WHERE notification_id = ?
                   AND student_id = ?
-            `).get(notificationId, student.id);
+            `, [notificationId, student.id]);
 
             if (!existing) {
-                db.prepare(`
+                await runtimeRun(`
                     INSERT INTO notification_reads (notification_id, student_id)
                     VALUES (?, ?)
-                `).run(notificationId, student.id);
+                `, [notificationId, student.id]);
             }
 
             return res.json({
@@ -5783,7 +7040,7 @@ app.patch(
             console.error("Mark notification read error:", error);
             return res.status(500).json({
                 status: "error",
-                message: error.message
+                message: "Unable to update notification status"
             });
         }
     }
@@ -5822,12 +7079,12 @@ app.get(
     "/api/admin/results/analytics",
     authenticateToken,
     requireAdmin,
-    (req, res) => {
+    async (req, res) => {
         try {
             const { filters, params } = getResultQueryFilters(req);
             const whereSql = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
 
-            const studentSummary = db.prepare(`
+            const studentSummary = await runtimeGet(`
                 WITH student_outcomes AS (
                     SELECT
                         r.student_id,
@@ -5845,9 +7102,9 @@ app.get(
                     COUNT(CASE WHEN overall_status = 'Pass' THEN 1 END) AS students_passed,
                     COUNT(CASE WHEN overall_status = 'Fail' THEN 1 END) AS students_failed
                 FROM student_outcomes
-            `).get(...params);
+            `, params);
 
-            const summary = db.prepare(`
+            const summary = await runtimeGet(`
                 SELECT
                     COUNT(*) AS total_result_rows,
                     AVG(CASE WHEN total_marks IS NOT NULL THEN total_marks ELSE 0 END) AS average_percentage,
@@ -5857,9 +7114,9 @@ app.get(
                     COUNT(DISTINCT CASE WHEN backlog_status IN ('Backlog', 'Arrear') THEN student_id || ':' || subject END) AS backlog_count
                 FROM result_records r
                 ${whereSql}
-            `).get(...params);
+            `, params);
 
-            const sections = db.prepare(`
+            const sections = await runtimeAll(`
                 WITH student_outcomes AS (
                     SELECT
                         r.section AS section,
@@ -5879,30 +7136,30 @@ app.get(
                     COUNT(DISTINCT student_id) AS students,
                     COUNT(DISTINCT CASE WHEN overall_status = 'Pass' THEN student_id END) AS passed,
                     COUNT(DISTINCT CASE WHEN overall_status = 'Fail' THEN student_id END) AS failed,
-                    ROUND(AVG(avg_marks), 2) AS avg_percentage,
-                    ROUND(AVG(avg_sgpa), 2) AS avg_sgpa
+                    ROUND(AVG(avg_marks)::numeric, 2) AS avg_percentage,
+                    ROUND(AVG(avg_sgpa)::numeric, 2) AS avg_sgpa
                 FROM student_outcomes
                 GROUP BY section
                 ORDER BY section ASC
-            `).all(...params);
+            `, params);
 
-            const subjectAnalytics = db.prepare(`
+            const subjectAnalytics = await runtimeAll(`
                 SELECT
                     r.subject AS subject,
                     MIN(r.subject_code) AS subject_code,
                     COUNT(DISTINCT r.section || ':' || r.student_id) AS students_appeared,
                     COUNT(DISTINCT CASE WHEN r.pass_status = 'Pass' THEN r.section || ':' || r.student_id END) AS students_passed,
                     COUNT(DISTINCT CASE WHEN r.pass_status = 'Fail' THEN r.section || ':' || r.student_id END) AS students_failed,
-                    ROUND(AVG(CASE WHEN r.total_marks IS NOT NULL THEN r.total_marks ELSE 0 END), 2) AS average_marks,
+                    ROUND(AVG(CASE WHEN r.total_marks IS NOT NULL THEN r.total_marks ELSE 0 END)::numeric, 2) AS average_marks,
                     MAX(CASE WHEN r.total_marks IS NOT NULL THEN r.total_marks ELSE 0 END) AS highest_marks,
                     MIN(CASE WHEN r.total_marks IS NOT NULL THEN r.total_marks ELSE 0 END) AS lowest_marks
                 FROM result_records r
                 ${whereSql}
                 GROUP BY r.subject
                 ORDER BY r.subject ASC
-            `).all(...params);
+            `, params);
 
-            const gradeDistribution = db.prepare(`
+            const gradeDistribution = await runtimeAll(`
                 SELECT
                     r.grade AS grade,
                     COUNT(*) AS count
@@ -5918,9 +7175,9 @@ app.get(
                     WHEN 'C' THEN 6
                     ELSE 7
                 END
-            `).all(...params);
+            `, params);
 
-            const departmentComparison = db.prepare(`
+            const departmentComparison = await runtimeAll(`
                 WITH student_outcomes AS (
                     SELECT
                         r.department AS department,
@@ -5940,12 +7197,12 @@ app.get(
                     COUNT(DISTINCT student_id) AS students,
                     COUNT(DISTINCT CASE WHEN overall_status = 'Pass' THEN student_id END) AS passed,
                     COUNT(DISTINCT CASE WHEN overall_status = 'Fail' THEN student_id END) AS failed,
-                    ROUND(AVG(avg_marks), 2) AS avg_percentage,
-                    ROUND(AVG(avg_sgpa), 2) AS avg_sgpa
+                    ROUND(AVG(avg_marks)::numeric, 2) AS avg_percentage,
+                    ROUND(AVG(avg_sgpa)::numeric, 2) AS avg_sgpa
                 FROM student_outcomes
                 GROUP BY department
                 ORDER BY department ASC
-            `).all(...params);
+            `, params);
 
             const summaryTotals = {
                 total_students: Number(studentSummary.total_students || 0),
@@ -5992,7 +7249,7 @@ app.get(
             });
         } catch (error) {
             console.error("Result analytics error:", error);
-            return res.status(500).json({ status: "error", message: error.message });
+            return res.status(500).json({ status: "error", message: "Unable to load result analytics" });
         }
     }
 );
@@ -6001,7 +7258,7 @@ app.post(
     "/api/admin/results/import",
     authenticateToken,
     requireAdmin,
-    (req, res) => {
+    async (req, res) => {
         try {
             const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
             if (!rows.length) {
@@ -6009,7 +7266,26 @@ app.post(
             }
 
             const imported = [];
-            const stmt = db.prepare(`
+            const insertResult = async (run) => {
+                for (const row of rows) {
+                    const studentId = Number(row.student_id || row.studentId || 0);
+                    const department = String(row.department || "").trim();
+                    const year = Number(row.year || 1);
+                    const semester = Number(row.semester || 1);
+                    const section = String(row.section || "").trim();
+                    const academicYear = String(row.academic_year || row.academicYear || "2026-27").trim();
+                    const subject = String(row.subject || "").trim();
+                    const subjectCode = String(row.subject_code || row.subjectCode || "").trim();
+                    const internalMarks = Number(row.internal_marks ?? row.internalMarks ?? 0);
+                    const externalMarks = Number(row.external_marks ?? row.externalMarks ?? 0);
+                    const totalMarks = Number(row.total_marks ?? row.totalMarks ?? internalMarks + externalMarks);
+                    const grade = String(row.grade || getResultGrade(totalMarks)).trim();
+                    const gradePoint = Number(row.grade_point ?? row.gradePoint ?? getGradePoint(grade));
+                    const passStatus = String(row.pass_status || row.passStatus || (totalMarks >= 40 ? "Pass" : "Fail")).trim();
+                    const backlogStatus = String(row.backlog_status || row.backlogStatus || (passStatus === "Pass" ? "None" : "Backlog")).trim();
+                    const resultStatus = String(row.result_status || row.resultStatus || "Uploaded").trim();
+                    const publicationStatus = String(row.publication_status || row.publicationStatus || "Draft").trim();
+                    const result = await run(`
                 INSERT INTO result_records (
                     student_id, department, year, semester, section, academic_year,
                     subject, subject_code, internal_marks, external_marks, total_marks,
@@ -6017,28 +7293,8 @@ app.post(
                     publication_status, reviewed_by, approved_by, published_by,
                     created_by, created_at, updated_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-            `);
-
-            rows.forEach((row) => {
-                const studentId = Number(row.student_id || row.studentId || 0);
-                const department = String(row.department || "").trim();
-                const year = Number(row.year || 1);
-                const semester = Number(row.semester || 1);
-                const section = String(row.section || "").trim();
-                const academicYear = String(row.academic_year || row.academicYear || "2026-27").trim();
-                const subject = String(row.subject || "").trim();
-                const subjectCode = String(row.subject_code || row.subjectCode || "").trim();
-                const internalMarks = Number(row.internal_marks ?? row.internalMarks ?? 0);
-                const externalMarks = Number(row.external_marks ?? row.externalMarks ?? 0);
-                const totalMarks = Number(row.total_marks ?? row.totalMarks ?? internalMarks + externalMarks);
-                const grade = String(row.grade || getResultGrade(totalMarks)).trim();
-                const gradePoint = Number(row.grade_point ?? row.gradePoint ?? getGradePoint(grade));
-                const passStatus = String(row.pass_status || row.passStatus || (totalMarks >= 40 ? "Pass" : "Fail")).trim();
-                const backlogStatus = String(row.backlog_status || row.backlogStatus || (passStatus === "Pass" ? "None" : "Backlog")).trim();
-                const resultStatus = String(row.result_status || row.resultStatus || "Uploaded").trim();
-                const publicationStatus = String(row.publication_status || row.publicationStatus || "Draft").trim();
-
-                const result = stmt.run(
+                RETURNING id
+            `, [
                     studentId,
                     department,
                     year,
@@ -6060,14 +7316,21 @@ app.post(
                     null,
                     null,
                     req.user.id
-                );
-                imported.push({ id: result.lastInsertRowid, student_id: studentId, subject });
-            });
+                ]);
+                    imported.push({ id: result.lastInsertRowid ?? result.rows?.[0]?.id, student_id: studentId, subject });
+                }
+            };
+
+            if (usePostgresRuntime) {
+                await postgres.transaction(async transaction => insertResult((sql, params) => transaction.run(sql, params)));
+            } else {
+                await insertResult((sql, params) => runtimeRun(sql, params));
+            }
 
             return res.status(201).json({ status: "success", message: `${imported.length} result rows imported`, imported });
         } catch (error) {
             console.error("Result import error:", error);
-            return res.status(500).json({ status: "error", message: error.message });
+            return res.status(500).json({ status: "error", message: "Unable to import results" });
         }
     }
 );
@@ -6076,15 +7339,15 @@ app.patch(
     "/api/admin/results/:id/publish",
     authenticateToken,
     requireAdmin,
-    (req, res) => {
+    async (req, res) => {
         try {
             const resultId = Number(req.params.id);
-            const target = db.prepare(`SELECT * FROM result_records WHERE id = ?`).get(resultId);
+            const target = await runtimeGet(`SELECT * FROM result_records WHERE id = ?`, [resultId]);
             if (!target) {
                 return res.status(404).json({ status: "error", message: "Result record not found" });
             }
 
-            db.prepare(`
+            await runtimeRun(`
                 UPDATE result_records
                 SET publication_status = 'Published',
                     published_by = ?,
@@ -6092,12 +7355,12 @@ app.patch(
                     result_status = 'Published',
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?
-            `).run(req.user.id, resultId);
+            `, [req.user.id, resultId]);
 
             return res.json({ status: "success", message: "Results published to students" });
         } catch (error) {
             console.error("Result publish error:", error);
-            return res.status(500).json({ status: "error", message: error.message });
+            return res.status(500).json({ status: "error", message: "Unable to publish results" });
         }
     }
 );
@@ -6106,19 +7369,19 @@ app.get(
     "/api/student/results",
     authenticateToken,
     requireStudent,
-    (req, res) => {
+    async (req, res) => {
         try {
-            const student = db.prepare(`SELECT id, student_id, full_name, department, year, section, academic_year FROM students WHERE user_id = ?`).get(req.user.id);
+            const student = await runtimeGet(`SELECT id, student_id, full_name, department, year, section, academic_year FROM students WHERE user_id = ?`, [req.user.id]);
             if (!student) {
                 return res.status(404).json({ status: "error", message: "Student record not found" });
             }
 
-            const records = db.prepare(`
+            const records = await runtimeAll(`
                 SELECT *
                 FROM result_records
                 WHERE student_id = ?
                 ORDER BY academic_year DESC, semester ASC, created_at DESC
-            `).all(student.id);
+            `, [student.id]);
 
             const published = records.filter((row) => row.publication_status === "Published");
             return res.json({
@@ -6131,7 +7394,7 @@ app.get(
             });
         } catch (error) {
             console.error("Student results error:", error);
-            return res.status(500).json({ status: "error", message: error.message });
+            return res.status(500).json({ status: "error", message: "Unable to load results" });
         }
     }
 );
@@ -6140,13 +7403,13 @@ app.get(
     "/api/admin/notifications",
     authenticateToken,
     requireAdmin,
-    (req, res) => {
+    async (req, res) => {
         try {
-            const notifications = db.prepare(`
+            const notifications = await runtimeAll(`
                 SELECT *
                 FROM notifications
                 ORDER BY created_at DESC
-            `).all();
+            `);
 
             return res.json({
                 status: "success",
@@ -6156,7 +7419,7 @@ app.get(
             console.error("Admin notifications load error:", error);
             return res.status(500).json({
                 status: "error",
-                message: error.message
+                message: "Unable to load notifications"
             });
         }
     }
@@ -6166,7 +7429,7 @@ app.post(
     "/api/admin/notifications",
     authenticateToken,
     requireAdmin,
-    (req, res) => {
+    async (req, res) => {
         try {
             const { title, message, audience, branch, year, section } = req.body;
 
@@ -6177,28 +7440,29 @@ app.post(
                 });
             }
 
-            const result = db.prepare(`
+            const result = await runtimeRun(`
                 INSERT INTO notifications (title, message, audience, branch, year, section)
                 VALUES (?, ?, ?, ?, ?, ?)
-            `).run(
+                RETURNING id
+            `, [
                 title,
                 message || "",
                 audience || "All",
                 branch || null,
                 year ? Number(year) : null,
                 section || null
-            );
+            ]);
 
             return res.status(201).json({
                 status: "success",
                 message: "Notification published successfully",
-                notification_id: result.lastInsertRowid
+                notification_id: result.lastInsertRowid ?? result.rows?.[0]?.id
             });
         } catch (error) {
             console.error("Admin notifications create error:", error);
             return res.status(500).json({
                 status: "error",
-                message: error.message
+                message: "Unable to publish notification"
             });
         }
     }
@@ -6208,13 +7472,13 @@ app.delete(
     "/api/admin/notifications/:id",
     authenticateToken,
     requireAdmin,
-    (req, res) => {
+    async (req, res) => {
         try {
             const id = Number(req.params.id);
-            const result = db.prepare(`
+            const result = await runtimeRun(`
                 DELETE FROM notifications
                 WHERE id = ?
-            `).run(id);
+            `, [id]);
 
             if (result.changes === 0) {
                 return res.status(404).json({
@@ -6231,7 +7495,7 @@ app.delete(
             console.error("Admin notifications delete error:", error);
             return res.status(500).json({
                 status: "error",
-                message: error.message
+                message: "Unable to delete notification"
             });
         }
     }
@@ -6239,6 +7503,13 @@ app.delete(
 
 app.use((error, req, res, next) => {
     if (res.headersSent) return next(error);
+
+    if (error.message === "Origin is not allowed by CORS") {
+        return res.status(403).json({
+            status: "error",
+            message: "Origin is not allowed"
+        });
+    }
 
     if (error.type === "entity.too.large" || error.code === "LIMIT_FILE_SIZE") {
         return res.status(413).json({
@@ -6261,7 +7532,7 @@ app.use((error, req, res, next) => {
     });
 });
 
-app.listen(PORT, "0.0.0.0", () => {
+const server = app.listen(PORT, HOST, () => {
     console.log("\n==========================================");
     console.log(" KHIT FAMILY PORTAL SERVER");
     console.log("==========================================");
@@ -6269,3 +7540,14 @@ app.listen(PORT, "0.0.0.0", () => {
     console.log(` API:    http://localhost:${PORT}/api/status`);
     console.log("==========================================\n");
 });
+
+function shutdown(signal) {
+    console.log(`${signal} received. Shutting down gracefully.`);
+    server.close(() => {
+        db.close();
+        process.exit(0);
+    });
+}
+
+process.once("SIGTERM", () => shutdown("SIGTERM"));
+process.once("SIGINT", () => shutdown("SIGINT"));

@@ -1,6 +1,8 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+    <script src="language.js"></script>
+     <script src="api-config.js"></script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
@@ -448,7 +450,6 @@ header{
         <div class="links">
 
             <a
-                href="#"
                 class="link-btn"
                 id="linkedinLink"
             >
@@ -456,7 +457,6 @@ header{
             </a>
 
             <a
-                href="#"
                 class="link-btn"
                 id="githubLink"
             >
@@ -464,7 +464,6 @@ header{
             </a>
 
             <a
-                href="#"
                 class="link-btn"
                 id="portfolioLink"
             >
@@ -894,10 +893,17 @@ async function loadProfile(){
         profileLinks.forEach(([id, url]) => {
             const link = document.getElementById(id);
             const hasUrl = Boolean(url);
-            link.href = hasUrl ? url : "#";
-            link.target = hasUrl ? "_blank" : "";
-            link.rel = hasUrl ? "noopener noreferrer" : "";
+            if (hasUrl) {
+                link.href = url;
+                link.target = "_blank";
+                link.rel = "noopener noreferrer";
+            } else {
+                link.removeAttribute("href");
+                link.removeAttribute("target");
+                link.removeAttribute("rel");
+            }
             link.style.opacity = hasUrl ? "1" : "0.55";
+            link.setAttribute("aria-disabled", hasUrl ? "false" : "true");
         });
 
 

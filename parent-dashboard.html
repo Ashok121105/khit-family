@@ -1,6 +1,8 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+<script src="language.js"></script>
+<script src="api-config.js"></script>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Parent Dashboard | KHIT Family</title>
@@ -141,6 +143,101 @@
       margin-top: 12px;
       flex-wrap: wrap;
     }
+    .child-selector {
+      display: grid;
+      gap: 6px;
+      min-width: min(100%, 320px);
+      color: #dbeafe;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .child-selector select {
+      min-width: 260px;
+      padding: 10px 12px;
+      border: 1px solid rgba(255,255,255,0.35);
+      border-radius: 8px;
+      background: #fff;
+      color: #0f172a;
+      font: inherit;
+    }
+    .child-selector select:disabled { opacity: .7; cursor: not-allowed; }
+    .notice {
+      display: none;
+      margin-bottom: 20px;
+      padding: 13px 15px;
+      border: 1px solid #fecaca;
+      border-radius: 10px;
+      background: #fff1f2;
+      color: #991b1b;
+      font-size: 13px;
+    }
+    .notice.show { display: block; }
+    .empty-state {
+      grid-column: 1 / -1;
+      text-align: center;
+      padding: 42px 20px;
+    }
+    .mobile-card {
+      margin-bottom: 20px;
+    }
+    .mobile-form {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+      gap: 12px;
+      align-items: end;
+    }
+    .mobile-field {
+      display: grid;
+      gap: 6px;
+    }
+    .mobile-field label {
+      color: #475569;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .mobile-field input {
+      width: 100%;
+      padding: 10px 11px;
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
+      color: #0f172a;
+      font: inherit;
+    }
+    .mobile-field input:focus {
+      outline: none;
+      border-color: #1d4ed8;
+      box-shadow: 0 0 0 3px rgba(29,78,216,.12);
+    }
+    .mobile-form button {
+      min-height: 40px;
+      border: 0;
+      border-radius: 8px;
+      padding: 10px 14px;
+      background: #1d4ed8;
+      color: #fff;
+      cursor: pointer;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .mobile-form button:disabled { opacity: .6; cursor: wait; }
+    .mobile-help {
+      margin: 12px 0 0;
+      color: #64748b;
+      font-size: 12px;
+    }
+    .mobile-message {
+      min-height: 20px;
+      margin: 12px 0 0;
+      color: #166534;
+      font-size: 13px;
+    }
+    .mobile-message.error { color: #b91c1c; }
+    @media (max-width: 860px) {
+      .mobile-form { grid-template-columns: 1fr 1fr; }
+    }
+    @media (max-width: 520px) {
+      .mobile-form { grid-template-columns: 1fr; }
+    }
     .secondary-btn {
       display: inline-block;
       background: #e2e8f0;
@@ -184,8 +281,38 @@
       <h2 id="heroTitle">Loading parent portal...</h2>
       <p id="heroSubtitle">Please wait while your child information loads.</p>
       <div class="action-row">
-        <a class="secondary-btn" href="parent-child-profile.html">View Child Profile</a>
+        <div class="child-selector">
+          <label for="childSelect">Viewing child</label>
+          <select id="childSelect" aria-describedby="childSelectionStatus" disabled>
+            <option>Loading linked children...</option>
+          </select>
+          <span id="childSelectionStatus">Loading linked children...</span>
+        </div>
+        <a class="secondary-btn" id="profileLink" href="parent-child-profile.html">View Child Profile</a>
       </div>
+    </section>
+
+    <div id="notice" class="notice" role="alert"></div>
+
+    <section class="card mobile-card" aria-labelledby="mobileChangeTitle">
+      <h3 id="mobileChangeTitle">Change Mobile Number</h3>
+      <form id="mobileChangeForm" class="mobile-form" novalidate>
+        <div class="mobile-field">
+          <label for="currentMobile">Current mobile</label>
+          <input id="currentMobile" type="tel" readonly aria-readonly="true">
+        </div>
+        <div class="mobile-field">
+          <label for="newMobile">New mobile number</label>
+          <input id="newMobile" name="new_mobile" type="tel" inputmode="tel" autocomplete="tel" placeholder="e.g. +919876543210" required>
+        </div>
+        <div class="mobile-field" id="otpField" hidden>
+          <label for="mobileOtp">OTP</label>
+          <input id="mobileOtp" name="otp" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" placeholder="6-digit OTP">
+        </div>
+        <button id="mobileSubmit" type="submit">Request OTP</button>
+      </form>
+      <p id="mobileHelp" class="mobile-help">A verification code is required before your mobile number changes.</p>
+      <p id="mobileMessage" class="mobile-message" role="status"></p>
     </section>
 
     <section class="stats">
@@ -264,9 +391,182 @@
   <script>
     const token = localStorage.getItem('khit_parent_token');
     const user = JSON.parse(localStorage.getItem('khit_parent_user') || '{}');
+    const apiBase = `${window.KHIT_API_BASE}/api/parent`;
+    const selectedChildKey = 'khit_parent_selected_student_id';
+    const childSelect = document.getElementById('childSelect');
+    const childSelectionStatus = document.getElementById('childSelectionStatus');
+    const notice = document.getElementById('notice');
+    const mobileChangeForm = document.getElementById('mobileChangeForm');
+    const currentMobileInput = document.getElementById('currentMobile');
+    const newMobileInput = document.getElementById('newMobile');
+    const mobileOtpInput = document.getElementById('mobileOtp');
+    const otpField = document.getElementById('otpField');
+    const mobileSubmit = document.getElementById('mobileSubmit');
+    const mobileMessage = document.getElementById('mobileMessage');
+    let mobileChangeRequested = false;
+    let linkedChildren = [];
 
     if (!token) {
       window.location.href = 'parent-login.html';
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[character]));
+    }
+
+    function showNotice(message) {
+      notice.textContent = message;
+      notice.classList.add('show');
+    }
+
+    function clearNotice() {
+      notice.textContent = '';
+      notice.classList.remove('show');
+    }
+
+    function normalizeMobile(value) {
+      return String(value || '').trim().replace(/[\s()-]/g, '');
+    }
+
+    function isValidMobile(value) {
+      return /^\+?[1-9]\d{9,14}$/.test(normalizeMobile(value));
+    }
+
+    function setMobileMessage(message, isError = false) {
+      mobileMessage.textContent = message;
+      mobileMessage.classList.toggle('error', isError);
+    }
+
+    function setCurrentMobile(value) {
+      const mobile = normalizeMobile(value);
+      currentMobileInput.value = mobile || 'Not available';
+    }
+
+    function setMobileLoading(isLoading) {
+      mobileSubmit.disabled = isLoading;
+      newMobileInput.disabled = isLoading;
+      mobileOtpInput.disabled = isLoading;
+      mobileSubmit.textContent = isLoading ? 'Please wait...' : (mobileChangeRequested ? 'Confirm Change' : 'Request OTP');
+    }
+
+    async function submitMobileChange(event) {
+      event.preventDefault();
+      const newMobile = normalizeMobile(newMobileInput.value);
+      if (!isValidMobile(newMobile)) {
+        setMobileMessage('Enter a valid mobile number with 10 to 15 digits.', true);
+        return;
+      }
+
+      const currentMobile = normalizeMobile(currentMobileInput.value);
+      if (currentMobile !== 'Not available' && newMobile === currentMobile) {
+        setMobileMessage('New mobile number must be different from the current number.', true);
+        return;
+      }
+
+      if (!mobileChangeRequested) {
+        setMobileLoading(true);
+        setMobileMessage('Requesting verification code...');
+        try {
+          const response = await fetch(`${apiBase}/mobile-change/request`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ new_mobile: newMobile })
+          });
+          const result = await response.json();
+          if (handleUnauthorized(response)) return;
+          if (!response.ok) throw new Error(result.message || 'Unable to request mobile change');
+          mobileChangeRequested = true;
+          otpField.hidden = false;
+          mobileOtpInput.focus();
+          setMobileMessage('Verification code requested. Enter it to confirm the change.');
+        } catch (error) {
+          setMobileMessage(error.message || 'Unable to request mobile change.', true);
+        } finally {
+          setMobileLoading(false);
+        }
+        return;
+      }
+
+      const otp = mobileOtpInput.value.trim();
+      if (!/^\d{6}$/.test(otp)) {
+        setMobileMessage('Enter the 6-digit verification code.', true);
+        return;
+      }
+
+      setMobileLoading(true);
+      setMobileMessage('Confirming mobile number change...');
+      try {
+        const response = await fetch(`${apiBase}/mobile-change/confirm`, {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ new_mobile: newMobile, otp })
+        });
+        const result = await response.json();
+        if (handleUnauthorized(response)) return;
+        if (!response.ok) throw new Error(result.message || 'Unable to confirm mobile change');
+        if (result.token) localStorage.setItem('khit_parent_token', result.token);
+        const updatedUser = { ...user, username: newMobile, parent_mobile: newMobile };
+        localStorage.setItem('khit_parent_user', JSON.stringify(updatedUser));
+        setCurrentMobile(newMobile);
+        newMobileInput.value = '';
+        mobileOtpInput.value = '';
+        mobileChangeRequested = false;
+        otpField.hidden = true;
+        setMobileMessage(result.message || 'Mobile number updated successfully.');
+      } catch (error) {
+        setMobileMessage(error.message || 'Unable to confirm mobile change.', true);
+      } finally {
+        setMobileLoading(false);
+      }
+    }
+
+    function handleUnauthorized(response) {
+      if (response.status === 401) {
+        logout();
+        return true;
+      }
+      return false;
+    }
+
+    function resetData(message) {
+      document.getElementById('heroTitle').textContent = 'Parent portal';
+      document.getElementById('heroSubtitle').textContent = message;
+      ['totalFees', 'paidFees', 'pendingFees', 'studentIdStat', 'studentName', 'studentDepartment', 'studentYear', 'studentSection', 'studentAcademicYear', 'parentName'].forEach(id => {
+        document.getElementById(id).textContent = '-';
+      });
+      document.getElementById('attendanceList').textContent = message;
+      document.getElementById('marksList').textContent = message;
+      document.getElementById('notificationsList').textContent = message;
+      document.getElementById('feeTableBody').innerHTML = `<tr><td colspan="5" class="muted">${escapeHtml(message)}</td></tr>`;
+    }
+
+    function renderChildOptions() {
+      if (!linkedChildren.length) {
+        childSelect.innerHTML = '<option>No linked children</option>';
+        childSelect.disabled = true;
+        childSelectionStatus.textContent = 'No student profiles are linked to this parent account.';
+        document.getElementById('profileLink').hidden = true;
+        resetData('No linked children are available for this parent account.');
+        return null;
+      }
+
+      const storedId = localStorage.getItem(selectedChildKey);
+      const selected = linkedChildren.find(child => String(child.id) === storedId) || linkedChildren[0];
+      childSelect.innerHTML = linkedChildren.map(child => `<option value="${escapeHtml(child.id)}">${escapeHtml(child.full_name || child.student_id || 'Linked student')} (${escapeHtml(child.student_id || '-')})</option>`).join('');
+      childSelect.value = String(selected.id);
+      childSelect.disabled = linkedChildren.length < 2;
+      childSelectionStatus.textContent = linkedChildren.length === 1 ? 'One linked child' : `${linkedChildren.length} linked children`;
+      document.getElementById('profileLink').hidden = false;
+      return selected.id;
+    }
+
+    async function loadChildren() {
+      const response = await fetch(`${apiBase}/children`, { headers: { Authorization: `Bearer ${token}` } });
+      if (handleUnauthorized(response)) return null;
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.message || 'Unable to load linked children');
+      linkedChildren = Array.isArray(result.children) ? result.children : [];
+      return renderChildOptions();
     }
 
     function formatCurrency(value) {
@@ -274,9 +574,14 @@
       return `${num.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
     }
 
-    async function loadDashboard() {
+    async function loadDashboard(studentId) {
+      if (!studentId) return;
+      clearNotice();
+      localStorage.setItem(selectedChildKey, String(studentId));
+      document.getElementById('profileLink').href = `parent-child-profile.html?student_id=${encodeURIComponent(studentId)}`;
+      document.getElementById('heroSubtitle').textContent = 'Loading selected child information...';
       try {
-        const response = await fetch('http://localhost:5000/api/parent/dashboard', {
+        const response = await fetch(`${apiBase}/dashboard?student_id=${encodeURIComponent(studentId)}`, {
           headers: {
             'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json'
@@ -285,7 +590,9 @@
 
         const result = await response.json();
 
+        if (handleUnauthorized(response)) return;
         if (!response.ok) {
+          if (response.status === 403) throw new Error('This child is not linked to the logged-in parent.');
           throw new Error(result.message || 'Unable to load parent dashboard');
         }
 
@@ -310,9 +617,9 @@
         if (attendance && attendance.length) {
           document.getElementById('attendanceList').innerHTML = attendance.slice(0, 8).map(item => `
             <div style="padding:8px 0; border-bottom:1px solid #e2e8f0;">
-              <strong>${item.subject_name || 'Subject'}</strong><br>
-              <span>${item.attendance_date} </span>
-              <span class="status ${item.status.toLowerCase() === 'present' ? 'present' : 'absent'}">${item.status}</span>
+              <strong>${escapeHtml(item.subject_name || 'Subject')}</strong><br>
+              <span>${escapeHtml(item.attendance_date || '')} </span>
+              <span class="status ${String(item.status || '').toLowerCase() === 'present' ? 'present' : 'absent'}">${escapeHtml(item.status || 'Unknown')}</span>
             </div>
           `).join('');
         } else {
@@ -325,7 +632,7 @@
           ];
           document.getElementById('feeTableBody').innerHTML = feeRows.map(row => `
             <tr>
-              <td>${row.label}</td>
+              <td>${escapeHtml(row.label)}</td>
               <td>${formatCurrency(row.total)}</td>
               <td>${formatCurrency(row.paid)}</td>
               <td>${formatCurrency(row.pending)}</td>
@@ -339,8 +646,8 @@
         if (marks && marks.length) {
           document.getElementById('marksList').innerHTML = marks.slice(0, 8).map(item => `
             <div style="padding:8px 0; border-bottom:1px solid #e2e8f0;">
-              <strong>${item.subject_name || 'Subject'}</strong><br>
-              <span>${item.exam_type || 'Exam'}: ${item.total_marks || 0}</span>
+              <strong>${escapeHtml(item.subject_name || 'Subject')}</strong><br>
+              <span>${escapeHtml(item.exam_type || 'Exam')}: ${escapeHtml(item.total_marks || 0)}</span>
             </div>
           `).join('');
         } else {
@@ -350,8 +657,8 @@
         if (notifications && notifications.length) {
           document.getElementById('notificationsList').innerHTML = notifications.slice(0, 8).map(item => `
             <div class="notification-item">
-              <strong>${item.title || 'Notification'}</strong><br>
-              <span class="muted">${item.message || ''}</span><br>
+              <strong>${escapeHtml(item.title || 'Notification')}</strong><br>
+              <span class="muted">${escapeHtml(item.message || '')}</span><br>
               <small class="muted">${item.created_at ? new Date(item.created_at).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }) : 'Recently'}</small>
             </div>
           `).join('');
@@ -361,19 +668,36 @@
 
       } catch (error) {
         console.error(error);
-        alert(error.message || 'Unable to load parent dashboard');
-        logout();
+        showNotice(error.message || 'Unable to load parent dashboard');
+        document.getElementById('heroSubtitle').textContent = 'The selected child could not be loaded.';
       }
     }
+
+    childSelect.addEventListener('change', () => loadDashboard(childSelect.value));
+    mobileChangeForm.addEventListener('submit', submitMobileChange);
 
     function logout() {
       localStorage.removeItem('khit_parent_token');
       localStorage.removeItem('khit_parent_user');
+      localStorage.removeItem(selectedChildKey);
       window.location.href = 'parent-login.html';
     }
 
-    loadDashboard();
+    (async function initializeParentDashboard() {
+      document.getElementById('headerUser').textContent = user.parent_name || 'Parent';
+      setCurrentMobile(user.parent_mobile || user.username);
+      try {
+        const selectedId = await loadChildren();
+        if (selectedId) await loadDashboard(selectedId);
+      } catch (error) {
+        showNotice(error.message || 'Unable to load linked children');
+        childSelect.innerHTML = '<option>Unable to load linked children</option>';
+        childSelect.disabled = true;
+        resetData('Linked children could not be loaded.');
+      }
+    })();
   </script>
+  <script src="khit-ai.js"></script>
 </body>
 </html>
 

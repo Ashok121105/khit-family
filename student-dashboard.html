@@ -2,6 +2,8 @@
 <html lang="en">
 
 <head>
+    <script src="language.js"></script>
+     <script src="api-config.js"></script>
 
     <meta charset="UTF-8">
 
@@ -1421,6 +1423,7 @@ function navigate(page) {
     window.location.href = page;
 }
 
+function goDashboard() { navigate("student-dashboard.html"); }
 function openProfile() { navigate("student-profile.html"); }
 function openStudentID() { navigate("student-id.html"); }
 function openAcademics() { navigate("student-academics.html"); }
@@ -1530,6 +1533,7 @@ function renderSocialLinks(student) {
 loadStudentProfile();
 
 </script>
+<script src="khit-ai.js"></script>
 
 </body>
 

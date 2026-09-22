@@ -37,9 +37,21 @@ npm start
 
 The server listens on `http://localhost:5000` and initializes the schema and missing demo records without deleting existing data.
 
-## Render limitation
+## Production migration status
 
-The app honors `process.env.PORT` and binds to `0.0.0.0`. SQLite and local uploads are acceptable for this demo, but Render filesystem storage is not a production persistence strategy. A future official deployment should migrate SQLite to PostgreSQL and uploads to object storage.
+The local demo supports SQLite compatibility, while the active prepared runtime uses PostgreSQL when `DATABASE_URL` is configured. The repository includes:
+
+- `.env.example` with non-secret local and Render configuration placeholders;
+- `database/postgres-schema.sql`, including the current module schema and legacy compatibility columns;
+- `database/backup-sqlite.js` for a non-destructive SQLite and uploads backup;
+- `database/migrate-sqlite-to-postgres.js`, which copies rows inside a PostgreSQL transaction and never deletes the SQLite source;
+- `/api/health` for Render health checks and graceful shutdown handling.
+
+Before switching the application runtime to PostgreSQL, run `npm run db:backup`, provision a new PostgreSQL database, set `DATABASE_URL`, run `npm run db:migrate:postgres`, compare every table count with the backup baseline, and test student/admin/parent/faculty logins. Do not delete `database/khit_family.db` until those checks pass.
+
+Render can run the app with build command `npm install` and start command `npm start`. Required variables are `NODE_ENV=production`, `JWT_SECRET`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `FRONTEND_URL`, and `DATABASE_URL`, plus SMTP variables if password reset email is enabled. Render local disk and `uploads/` are not permanent production storage. See [PRODUCTION-SETUP.md](PRODUCTION-SETUP.md) for the current readiness assessment and remaining PostgreSQL route/storage work.
+
+The frontend is currently served by Express from the repository root. Root pages that call the API load `api-config.js`; a separate Vercel deployment must inject `window.KHIT_API_BASE` with the approved Render API origin or configure a Vercel `/api` rewrite. Do not deploy this mixed repository as a static frontend and assume `/api` will reach Render.
 
 ## Scalability work and limits
 

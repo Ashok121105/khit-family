@@ -3,8 +3,12 @@ const bcrypt = require("bcryptjs");
 
 async function createAdmin() {
 
-    const username = "admin";
-    const password = "admin123";
+    const username = process.env.ADMIN_USERNAME;
+    const password = process.env.ADMIN_PASSWORD;
+
+    if (!username || !password) {
+        throw new Error("ADMIN_USERNAME and ADMIN_PASSWORD must be configured in the environment");
+    }
 
     // Check existing account
     const existing = db.prepare(`
@@ -48,7 +52,6 @@ async function createAdmin() {
     console.log("   ADMIN ACCOUNT CREATED");
     console.log("================================");
     console.log("Username : admin");
-    console.log("Password : admin123");
     console.log("Role     : admin");
     console.log("User ID  :", result.lastInsertRowid);
     console.log("================================");

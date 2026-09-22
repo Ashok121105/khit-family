@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <script src="language.js"></script>
+  <script src="api-config.js"></script>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Management Dashboard | KHIT Family</title>
+  <link rel="stylesheet" href="premium-theme.css">
+  <style>
+    :root { --ink:#14213d; --muted:#667085; --accent:#b4234d; --paper:#fff; --line:#e5e7eb; --soft:#f7f8fb; }
+    * { box-sizing:border-box; } body { margin:0; color:var(--ink); background:linear-gradient(145deg,#f5f7fb,#fffaf5); font-family:Arial,sans-serif; }
+    header { background:#14213d; color:#fff; padding:20px 5vw; display:flex; justify-content:space-between; align-items:center; gap:20px; }
+    header h1 { margin:0; font:700 25px Georgia,"Times New Roman",serif; } header p { margin:5px 0 0; color:#cdd6e6; font-size:13px; }
+    .actions { display:flex; gap:10px; align-items:center; } .actions button,.actions a { border:1px solid rgba(255,255,255,.3); background:transparent; color:#fff; padding:10px 13px; text-decoration:none; cursor:pointer; font-weight:700; font-size:12px; }
+    main { width:min(1380px,90vw); margin:34px auto 60px; } .notice { display:none; padding:14px 16px; margin-bottom:20px; border:1px solid #f2b8b5; background:#fff3f2; color:#9b1c1c; font-size:14px; } .notice.show { display:block; }
+    .hero { display:flex; justify-content:space-between; align-items:end; gap:24px; margin-bottom:26px; } .hero h2 { margin:0; font:700 35px Georgia,"Times New Roman",serif; } .hero p { margin:8px 0 0; color:var(--muted); }
+    .scope { text-align:right; color:var(--muted); font-size:13px; } .scope strong { display:block; color:var(--accent); font-size:15px; }
+    .cards { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:14px; margin-bottom:28px; } .card { background:var(--paper); border:1px solid var(--line); padding:21px; box-shadow:0 8px 24px rgba(20,33,61,.05); } .card h3 { margin:0 0 12px; font-size:14px; } .value { font:700 30px Georgia,"Times New Roman",serif; color:var(--accent); } .muted { color:var(--muted); font-size:13px; }
+    .layout { display:grid; grid-template-columns:minmax(0,1.3fr) minmax(300px,.7fr); gap:18px; } .panel { background:var(--paper); border:1px solid var(--line); padding:22px; margin-bottom:18px; } .panel h3 { margin:0 0 16px; font:700 20px Georgia,"Times New Roman",serif; }
+    .toolbar { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px; } .toolbar button { border:1px solid #d0d5dd; background:#fff; padding:9px 11px; cursor:pointer; color:var(--ink); font-weight:700; } .toolbar button.active { background:var(--accent); border-color:var(--accent); color:#fff; }
+    .table-wrap { overflow:auto; } table { width:100%; border-collapse:collapse; font-size:13px; } th,td { padding:11px 9px; border-bottom:1px solid var(--line); text-align:left; white-space:nowrap; } th { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.05em; } .empty { color:var(--muted); padding:20px 0; } .report-scope { margin:0 0 16px; padding:10px 12px; border-left:3px solid var(--accent); background:var(--soft); color:var(--muted); font-size:13px; } .report-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; } .report-block { border:1px solid var(--line); padding:14px; } .report-block h4 { margin:0 0 10px; font-size:14px; } .report-metric { display:flex; justify-content:space-between; gap:12px; padding:7px 0; border-bottom:1px solid var(--line); font-size:13px; } .report-metric:last-child { border-bottom:0; } .report-metric strong { color:var(--accent); }
+    .permission-list { display:flex; flex-wrap:wrap; gap:7px; } .permission { background:var(--soft); border:1px solid var(--line); padding:7px 9px; color:var(--muted); font-size:11px; }
+    @media(max-width:900px){ .cards{grid-template-columns:repeat(2,minmax(0,1fr));}.layout{grid-template-columns:1fr}.report-grid{grid-template-columns:1fr}.hero{align-items:start;flex-direction:column}.scope{text-align:left} } @media(max-width:520px){header{align-items:flex-start;flex-direction:column}.cards{grid-template-columns:1fr}main{width:calc(100vw - 28px);margin-top:22px}}
+  </style>
+</head>
+<body>
+  <header>
+    <div><h1>KHIT Family</h1><p>Reusable management workspace</p></div>
+    <div class="actions"><a href="index.html">Home</a><button id="logoutButton" type="button">Logout</button></div>
+  </header>
+  <main>
+    <div id="notice" class="notice" role="alert"></div>
+    <section class="hero"><div><h2 id="roleTitle">Management Dashboard</h2><p id="roleSubtitle">Loading authorized workspace...</p></div><div class="scope"><strong id="scopeLabel">Loading</strong><span id="departmentLabel"></span></div></section>
+    <section id="cards" class="cards"></section>
+    <div class="layout">
+      <section class="panel"><h3 id="detailTitle">Authorized data</h3><div class="toolbar" id="viewToolbar"></div><div id="detailContent" class="empty">Select a view.</div></section>
+      <aside>
+        <section class="panel"><h3>Permission profile</h3><div id="permissionList" class="permission-list"><span class="muted">Loading...</span></div></section>
+        <section class="panel"><h3>Session</h3><p id="sessionSummary" class="muted">Loading...</p></section>
+      </aside>
+    </div>
+  </main>
+  <script>
+    const token = localStorage.getItem("khit_token");
+    const user = JSON.parse(localStorage.getItem("khit_user") || "{}");
+    const role = String(user.role || "").toLowerCase();
+    const scope = String(user.scope || "").toUpperCase();
+    const roleNames = { hod:"HOD", associate_hod:"Associate HOD", assistant_hod:"Assistant HOD", ao:"AO", principal:"Principal", director:"Director", admin:"Admin", superadmin:"Super Admin" };
+    const viewDefinitions = {
+      dashboard: { label:"Overview", endpoint:"/api/management/dashboard", key:"stats" },
+      students: { label:"Students", endpoint:"/api/management/students", key:"students" },
+      faculty: { label:"Faculty", endpoint:"/api/management/faculty", key:"faculty" },
+      attendance: { label:"Attendance", endpoint:"/api/management/attendance", key:"attendance" },
+      academic: { label:"Academic results", endpoint:"/api/management/academic", key:"results" },
+      assignments: { label:"Assignments", endpoint:"/api/management/assignments", key:"assignments" },
+      materials: { label:"Study materials", endpoint:"/api/management/materials", key:"materials" },
+      notifications: { label:"Notifications", endpoint:"/api/management/notifications", key:"notifications" },
+      reports: { label:"Reports", endpoint:"/api/management/reports", key:"summary" },
+      fees: { label:"Fees", endpoint:"/api/admin/fees", key:"fees" },
+      leave: { label:"Leave requests", endpoint:"/api/admin/leave-requests", key:"leaveRequests" },
+      documents: { label:"Documents", endpoint:"/api/admin/documents", key:"documents" },
+      results: { label:"Results", endpoint:"/api/admin/results/analytics", key:"analytics" },
+      users: { label:"Users", endpoint:"/api/admin/students", key:"students" },
+      settings: { label:"System settings", endpoint:"/api/admin/settings", key:"settings" }
+    };
+    const roleViews = {
+      hod:["dashboard","students","faculty","attendance","academic","assignments","materials","leave","notifications","reports"],
+      associate_hod:["dashboard","students","faculty","attendance","academic","assignments","notifications"],
+      assistant_hod:["dashboard","students","faculty","attendance","assignments","notifications"],
+      ao:["dashboard","students","faculty","fees","attendance","reports","notifications","documents"],
+      principal:["dashboard","students","faculty","attendance","academic","results","fees","reports","notifications","documents"],
+      director:["dashboard","students","faculty","academic","reports","notifications"],
+      admin:["dashboard","students","faculty","fees","attendance","results","documents","notifications","reports","settings"],
+      superadmin:["dashboard","students","faculty","fees","attendance","results","documents","notifications","reports","users","settings"]
+    };
+    const notice = document.getElementById("notice");
+    function showNotice(message) { notice.textContent = message; notice.classList.add("show"); }
+    function escapeHtml(value) { return String(value ?? "").replace(/[&<>"']/g, character => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#039;"}[character])); }
+    function logout() { ["khit_token","khit_user","khit_student","khit_faculty"].forEach(key => localStorage.removeItem(key)); window.location.href = "management-login.html"; }
+    document.getElementById("logoutButton").addEventListener("click", logout);
+    if (!token || !roleNames[role]) { window.location.href = "management-login.html"; }
+    document.getElementById("roleTitle").textContent = `${roleNames[role]} Dashboard`;
+    document.getElementById("roleSubtitle").textContent = scope === "DEPARTMENT" ? "Department operations within your assigned scope." : "College operations within your configured permissions.";
+    document.getElementById("scopeLabel").textContent = scope || "Authenticated";
+    document.getElementById("departmentLabel").textContent = user.department_name || (user.department_id ? `Department ${user.department_id}` : "");
+    document.getElementById("sessionSummary").textContent = `${user.username || "User"} · ${roleNames[role]}${user.department_name ? ` · ${user.department_name}` : ""}`;
+    const permissions = Array.isArray(user.permissions) ? user.permissions : [];
+    document.getElementById("permissionList").innerHTML = permissions.length ? permissions.map(permission => `<span class="permission">${permission}</span>`).join("") : `<span class="muted">Permissions are enforced by the server.</span>`;
+    const views = roleViews[role] || ["dashboard"];
+    document.getElementById("cards").innerHTML = views.filter(view => view !== "dashboard").slice(0,8).map(view => `<div class="card"><h3>${escapeHtml(viewDefinitions[view].label)}</h3><div class="value" data-card="${view}">--</div><div class="muted">Loading authorized data</div></div>`).join("");
+    const toolbar = document.getElementById("viewToolbar");
+    toolbar.innerHTML = views.map(view => `<button type="button" data-view="${view}">${escapeHtml(viewDefinitions[view].label)}</button>`).join("");
+    async function loadView(view) {
+      document.querySelectorAll("[data-view]").forEach(button => button.classList.toggle("active", button.dataset.view === view));
+      const content = document.getElementById("detailContent"); content.className = "empty loading"; content.textContent = "Loading authorized data...";
+      if (view === "reports") { await loadReports(); return; }
+      const definition = viewDefinitions[view];
+      try {
+        const response = await fetch(definition.endpoint, { headers: { Authorization: `Bearer ${token}` } });
+        const result = await response.json();
+        if (response.status === 401) return logout();
+        if (response.status === 403) { content.className = "empty denied"; content.textContent = "Access denied by the server for this role or department scope."; showNotice("The server denied access to this view."); return; }
+        if (!response.ok) throw new Error(result.message || "Unable to load this view");
+        renderView(view, result);
+      } catch (error) { content.textContent = error.message; showNotice(error.message); }
+    }
+    function reportScopeLabel() {
+      return scope === "DEPARTMENT"
+        ? `Department-scoped report: ${user.department_name || "assigned department"}. Results are limited by server authorization.`
+        : `${scope === "SYSTEM" ? "System-wide" : "College-wide"} report. Results reflect this role's server-authorized permissions.`;
+    }
+    function reportMetric(label, value) {
+      return `<div class="report-metric"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value ?? 0)}</strong></div>`;
+    }
+    function reportRows(title, rows, columns) {
+      if (!Array.isArray(rows) || !rows.length) return `<div class="report-block"><h4>${escapeHtml(title)}</h4><p class="muted">No demo records available.</p></div>`;
+      return `<div class="report-block"><h4>${escapeHtml(title)}</h4><div class="table-wrap"><table><thead><tr>${columns.map(column => `<th>${escapeHtml(column.label)}</th>`).join("")}</tr></thead><tbody>${rows.slice(0,20).map(row => `<tr>${columns.map(column => `<td>${escapeHtml(row[column.key] ?? "-")}</td>`).join("")}</tr>`).join("")}</tbody></table></div></div>`;
+    }
+    async function loadReports() {
+      const content = document.getElementById("detailContent");
+      const reportViews = (roleViews[role] || []).filter(view => view !== "dashboard" && view !== "reports" && viewDefinitions[view]);
+      try {
+        const responses = await Promise.all(reportViews.map(async view => {
+          const response = await fetch(viewDefinitions[view].endpoint, { headers: { Authorization: `Bearer ${token}` } });
+          const result = await response.json();
+          if (response.status === 401) { logout(); throw new Error("Session expired"); }
+          if (response.status === 403) return [view, null, true];
+          if (!response.ok) throw new Error(result.message || `Unable to load ${viewDefinitions[view].label}`);
+          return [view, result, false];
+        }));
+        const deniedViews = responses.filter(([, , denied]) => denied).map(([view]) => viewDefinitions[view].label);
+        const data = Object.fromEntries(responses.filter(([, result]) => result).map(([view, result]) => [view, result]));
+        const students = Array.isArray(data.students?.students) ? data.students.students : [];
+        const faculty = Array.isArray(data.faculty?.faculty) ? data.faculty.faculty : [];
+        const attendance = Array.isArray(data.attendance?.attendance) ? data.attendance.attendance : [];
+        const academic = Array.isArray(data.academic?.results) ? data.academic.results : [];
+        const assignments = Array.isArray(data.assignments?.assignments) ? data.assignments.assignments : [];
+        const fees = Array.isArray(data.fees?.fees) ? data.fees.fees : [];
+        const results = Array.isArray(data.results?.analytics) ? data.results.analytics : [];
+        const present = attendance.filter(item => String(item.status).toLowerCase() === "present").length;
+        const absent = attendance.filter(item => String(item.status).toLowerCase() === "absent").length;
+        const average = academic.length ? (academic.reduce((sum, item) => sum + Number(item.average_marks || 0), 0) / academic.length).toFixed(1) : "0.0";
+        const totalFees = data.fees?.summary || {};
+        [ ["students", students.length], ["faculty", faculty.length], ["attendance", attendance.length], ["academic", academic.length], ["assignments", assignments.length], ["fees", fees.length] ].forEach(([key, value]) => { const card = document.querySelector(`[data-card="${key}"]`); if (card) card.textContent = value; });
+        content.className = "";
+        const unavailable = deniedViews.length ? `<p class="muted">Unavailable under current permissions: ${escapeHtml(deniedViews.join(", "))}.</p>` : "";
+        content.innerHTML = `<p class="report-scope">${escapeHtml(reportScopeLabel())}</p>${unavailable}<div class="report-grid">${reportMetric("Students", students.length)}${reportMetric("Faculty", faculty.length)}${reportMetric("Attendance present", present)}${reportMetric("Attendance absent", absent)}${reportMetric("Academic groups", academic.length)}${reportMetric("Average marks", average)}${reportMetric("Assignments", assignments.length)}${reportMetric("Fee records", fees.length || totalFees.records || 0)}${reportRows("Department students", students, [{key:"department",label:"Department"},{key:"student_id",label:"Student ID"},{key:"full_name",label:"Name"}])}${reportRows("Faculty summary", faculty, [{key:"department",label:"Department"},{key:"faculty_id",label:"Faculty ID"},{key:"full_name",label:"Name"}])}${reportRows("Academic/results summary", academic.length ? academic : results, [{key:"department",label:"Department"},{key:"subject",label:"Subject"},{key:"average_marks",label:"Average"}])}${reportRows("Attendance summary", attendance, [{key:"attendance_date",label:"Date"},{key:"subject",label:"Subject"},{key:"status",label:"Status"}])}</div>`;
+      } catch (error) {
+        content.className = "empty denied";
+        content.textContent = error.message || "Unable to load authorized report data.";
+        showNotice(content.textContent);
+      }
+    }
+    function renderView(view, data) {
+      const content = document.getElementById("detailContent");
+      if (view === "dashboard") {
+        const stats = data.stats || {};
+        content.innerHTML = `<p class="muted">${escapeHtml(data.role || roleNames[role])} workspace loaded from the protected management API.</p>`;
+        Object.entries(stats).forEach(([key, value]) => { const card = document.querySelector(`[data-card="${key}"]`); if (card) card.textContent = value ?? 0; });
+        return;
+      }
+      const payload = data[viewDefinitions[view].key];
+      const rows = Array.isArray(payload) ? payload : payload && typeof payload === "object" ? [payload] : [];
+      if (!rows.length) { content.className = "empty"; content.textContent = "No demo records are available for this authorized view."; return; }
+      const columns = Object.keys(rows[0]).slice(0, 7);
+      content.className = "table-wrap";
+      content.innerHTML = `<table><thead><tr>${columns.map(column => `<th>${escapeHtml(column.replaceAll("_", " "))}</th>`).join("")}</tr></thead><tbody>${rows.slice(0, 50).map(row => `<tr>${columns.map(column => `<td>${escapeHtml(row[column] ?? "-")}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+    }
+    document.querySelectorAll("[data-view]").forEach(button => button.addEventListener("click", () => loadView(button.dataset.view)));
+    loadView("dashboard");
+  </script>
+  <script src="khit-ai.js"></script>
+</body>
+</html>

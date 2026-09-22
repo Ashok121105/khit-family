@@ -1,6 +1,8 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+    <script src="language.js"></script>
+    <script src="api-config.js"></script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
@@ -427,25 +429,25 @@
     <div class="menu-title">Academic</div>
 
     <div class="menu">
-        <a href="#">Attendance</a>
-        <a href="#">Exams & Results</a>
-        <a href="#">Academics</a>
-        <a href="#">Timetable</a>
+        <span aria-disabled="true">Attendance · Coming soon</span>
+        <a href="admin-results.html">Exams &amp; Results</a>
+        <span aria-disabled="true">Academics · Coming soon</span>
+        <span aria-disabled="true">Timetable · Coming soon</span>
     </div>
 
     <div class="menu-title">Career</div>
 
     <div class="menu">
-        <a href="#">Placements</a>
-        <a href="#">Internships</a>
+        <span aria-disabled="true">Placements · Coming soon</span>
+        <span aria-disabled="true">Internships · Coming soon</span>
     </div>
 
     <div class="menu-title">System</div>
 
     <div class="menu">
-        <a href="#">Documents</a>
-        <a href="#">Reports</a>
-        <a href="#">Settings</a>
+        <a href="admin-documents.html">Documents</a>
+        <a href="admin-reports.html">Reports</a>
+        <a href="admin-settings.html">Settings</a>
     </div>
 
     <button class="logout" onclick="logout()">Logout</button>

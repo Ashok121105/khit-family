@@ -1,6 +1,8 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+<script src="language.js"></script>
+<script src="api-config.js"></script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>KHIT Family | Faculty Dashboard</title>
@@ -76,7 +78,7 @@
     </main>
 
     <script>
-        const API_URL = "http://localhost:5000";
+        const API_URL = window.KHIT_API_BASE || window.location.origin;
 
         function getToken() {
             return localStorage.getItem("khit_token");
@@ -156,6 +158,7 @@
 
         loadDashboard();
     </script>
+    <script src="khit-ai.js"></script>
 </body>
 </html>
 

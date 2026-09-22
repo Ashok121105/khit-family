@@ -6,6 +6,74 @@ CREATE TABLE IF NOT EXISTS users (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS roles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT UNIQUE NOT NULL,
+    description TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS permissions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    permission_key TEXT UNIQUE NOT NULL,
+    description TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS role_permissions (
+    role_id INTEGER NOT NULL,
+    permission_key TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (role_id, permission_key),
+    FOREIGN KEY(role_id) REFERENCES roles(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS user_roles (
+    user_id INTEGER NOT NULL,
+    role_id INTEGER NOT NULL,
+    is_primary INTEGER DEFAULT 1,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, role_id),
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY(role_id) REFERENCES roles(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS parents (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    full_name TEXT,
+    mobile TEXT UNIQUE,
+    email TEXT UNIQUE,
+    otp_verified INTEGER DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'inactive', 'pending', 'blocked')),
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS parent_student_links (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    parent_id INTEGER NOT NULL,
+    student_id INTEGER NOT NULL,
+    relationship_type TEXT NOT NULL DEFAULT 'Guardian' CHECK(relationship_type IN ('Father', 'Mother', 'Guardian')),
+    is_primary INTEGER NOT NULL DEFAULT 1,
+    status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'inactive', 'blocked')),
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(parent_id, student_id),
+    FOREIGN KEY(parent_id) REFERENCES parents(id) ON DELETE CASCADE,
+    FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS parent_otp_verifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    parent_id INTEGER NOT NULL,
+    otp_hash TEXT NOT NULL,
+    purpose TEXT NOT NULL CHECK(purpose IN ('registration verification', 'login', 'mobile change')),
+    expires_at DATETIME NOT NULL,
+    used_at DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(parent_id) REFERENCES parents(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS password_reset_otps (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,

@@ -1,6 +1,8 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+    <script src="language.js"></script>
+    <script src="api-config.js"></script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
@@ -543,6 +545,7 @@
 
     <div class="top-links">
         <button class="portal-btn secondary" onclick="goToStudentLogin()">Student Login</button>
+        <button class="portal-btn secondary" onclick="window.location.href='management-login.html'">Management Login</button>
         <button class="admin-lock-btn" type="button" onclick="goToAdminLogin()" aria-label="Admin access" title="Admin access">Admin Access</button>
     </div>
 
@@ -962,6 +965,20 @@
 
             </div>
 
+            <div class="field">
+
+                <label>
+                    Relationship
+                </label>
+
+                <select id="parent_relationship">
+                    <option value="Guardian">Guardian</option>
+                    <option value="Father">Father</option>
+                    <option value="Mother">Mother</option>
+                </select>
+
+            </div>
+
 
             <div class="field">
 
@@ -1251,6 +1268,9 @@
 
             parent_mobile:
                 document.getElementById("parent_mobile").value.trim(),
+
+            parent_relationship:
+                document.getElementById("parent_relationship").value,
 
             parent_email:
                 document.getElementById("parent_email").value.trim(),

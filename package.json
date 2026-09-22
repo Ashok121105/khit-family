@@ -4,17 +4,24 @@
   "private": true,
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node --watch server.js",
+    "db:backup": "node database/backup-sqlite.js",
+    "db:migrate:postgres": "node database/migrate-sqlite-to-postgres.js",
+    "db:test:postgres": "node database/test-postgres.js",
+    "verify:production": "node verify-production-readiness.js"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1137.0",
     "bcryptjs": "^3.0.3",
     "better-sqlite3": "^13.0.3",
     "cors": "^2.8.6",
     "dotenv": "^18.0.0",
     "express": "^5.2.1",
+    "helmet": "^8.3.0",
     "jsonwebtoken": "^9.0.3",
     "multer": "^2.4.0",
     "nodemailer": "^10.0.10",
+    "pg": "^8.23.0",
     "xlsx": "^0.18.5"
   }
 }
