@@ -119,9 +119,9 @@
             .khit-ai-form button { border:0; border-radius:9px; padding:0 13px; background:var(--ai-gold); color:#301522; cursor:pointer; font-weight:800; }
             .khit-ai-form button:focus-visible { outline:2px solid #fff; outline-offset:2px; }
             .khit-password-wrap { position:relative; display:flex; align-items:center; width:100%; }
-            .khit-password-wrap input { flex:1; min-width:0; }
-            .khit-password-toggle { position:absolute; right:8px; width:32px; height:32px; padding:0; border:0; background:transparent; color:#74122f; cursor:pointer; font-size:17px; line-height:1; }
-            .khit-password-toggle:hover, .khit-password-toggle:focus-visible { background:transparent; color:#5e1029; transform:none; box-shadow:none; outline:2px solid rgba(143,23,56,.25); outline-offset:1px; }
+            .khit-password-wrap input, .password-wrap input { flex:1; min-width:0; padding-right:48px !important; }
+            .khit-password-toggle { position:absolute; top:50%; right:8px; z-index:2; width:32px !important; min-width:32px !important; height:32px !important; min-height:32px !important; margin:0 !important; padding:0 !important; border:0 !important; border-radius:50% !important; background:#f8e8ed !important; color:#8f1738 !important; cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:17px; line-height:1; box-shadow:none !important; transform:translateY(-50%) !important; transition:background .18s ease, color .18s ease, outline .18s ease !important; }
+            .khit-password-toggle:hover, .khit-password-toggle:focus-visible { background:#f4ccd7 !important; color:#5e1029 !important; transform:translateY(-50%) !important; box-shadow:none !important; outline:2px solid rgba(143,23,56,.25); outline-offset:1px; }
             @media (max-width:600px) { .khit-ai-launcher { right:16px; bottom:16px; width:58px; height:58px; } .khit-ai-panel { inset:12px; width:auto; height:auto; min-width:0; min-height:0; max-width:none; max-height:none; border-radius:16px; } .khit-ai-panel.is-minimized { inset:auto 12px 86px 12px; height:70px; } }
         `;
         document.head.appendChild(style);
