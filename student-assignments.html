@@ -41,11 +41,19 @@
             gap: 12px;
         }
 
+        .brand-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 12px;
+            text-decoration: none;
+            color: inherit;
+        }
+
         .logo {
             width: 42px;
             height: 42px;
             border-radius: 10px;
-            background: #123c69;
+            background: var(--khit-brand-blue, #123c69);
             color: white;
             display: flex;
             align-items: center;
@@ -55,7 +63,7 @@
         }
 
         .brand h2 {
-            color: #123c69;
+            color: var(--khit-brand-text, #123c69);
             font-size: 20px;
         }
 
@@ -434,13 +442,15 @@
 
     <div class="brand">
 
-        <div class="logo">
-            KHIT
-        </div>
+        <a class="brand-link" href="https://www.rvu.edu.in/" target="_blank" rel="noopener noreferrer">
+            <div class="logo">
+                RVU
+            </div>
 
-        <h2>
-            KHIT Family
-        </h2>
+            <h2>
+                RVU Family
+            </h2>
+        </a>
 
     </div>
 

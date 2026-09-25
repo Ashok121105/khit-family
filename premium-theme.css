@@ -4,9 +4,12 @@
  * navigation, data loading, and role-specific behavior.
  */
 :root {
+    --khit-brand-blue: #123c69;
+    --khit-brand-blue-light: #1d5d91;
+    --khit-brand-text: #123c69;
     --khit-maroon: #8f1738;
     --khit-maroon-dark: #5e1029;
-    --khit-burgundy: #74122f;
+    --khit-burgundy: #74112f;
     --khit-rose: #f7e8eb;
     --khit-mist: #fbf8f5;
     --khit-cream: #fffdf8;
