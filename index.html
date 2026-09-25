@@ -1241,7 +1241,14 @@
     document.addEventListener("DOMContentLoaded", () => {
         applyDemoProgress();
 
-        if (localStorage.getItem("khit_token")) {
+        let storedUser = {};
+        try {
+            storedUser = JSON.parse(localStorage.getItem("khit_user") || "{}");
+        } catch (error) {
+            localStorage.removeItem("khit_user");
+        }
+
+        if (localStorage.getItem("khit_token") && storedUser.role === "student") {
             window.location.href = "student-dashboard.html";
         }
     });
