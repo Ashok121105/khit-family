@@ -51,15 +51,20 @@ body {
 }
 
 .menu-title {
-    color: #64748b;
+    color: #f6d89b;
     font-size: 10px;
     text-transform: uppercase;
     margin: 18px 10px 8px;
     font-weight: 700;
+    letter-spacing: 0.08em;
 }
 
-.menu a {
-    display: block;
+.menu a,
+.menu-disabled {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 40px;
     padding: 11px 12px;
     margin: 3px 0;
     border-radius: 8px;
@@ -68,10 +73,33 @@ body {
     font-size: 13px;
 }
 
+.menu-icon {
+    width: 22px;
+    flex: 0 0 22px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: #f6d89b;
+    font-size: 15px;
+    line-height: 1;
+}
+
+.menu-disabled {
+    color: #aeb9c9;
+    cursor: not-allowed;
+    opacity: 0.78;
+}
+
 .menu a:hover,
 .menu a.active {
     background: #74122f;
     color: white;
+    box-shadow: inset 3px 0 0 #f6d89b;
+}
+
+.menu a:hover .menu-icon,
+.menu a.active .menu-icon {
+    color: #ffffff;
 }
 
 /* ================= MAIN ================= */
@@ -487,7 +515,8 @@ body {
         <a
             href="admin-dashboard.html"
             class="active">
-             Dashboard
+            <span class="menu-icon" aria-hidden="true">⌂</span>
+            <span>Dashboard</span>
         </a>
 
 
@@ -496,23 +525,28 @@ body {
         </div>
 
         <a href="admin-students.html">
-             Students
+              <span class="menu-icon" aria-hidden="true">♙</span>
+              <span>Students</span>
         </a>
 
         <a href="admin-faculty.html">
-             Faculty
+              <span class="menu-icon" aria-hidden="true">♟</span>
+              <span>Faculty</span>
         </a>
 
            <a href="store-dashboard.html">
-               KHIT Store
+              <span class="menu-icon" aria-hidden="true">▣</span>
+              <span>KHIT Store</span>
            </a>
 
         <a href="admin-fees.html">
-             Fees
+              <span class="menu-icon" aria-hidden="true">$</span>
+              <span>Fees</span>
         </a>
 
         <a href="admin-bus.html">
-             Bus Management
+              <span class="menu-icon" aria-hidden="true">▰</span>
+              <span>Bus Management</span>
         </a>
 
 
@@ -520,15 +554,16 @@ body {
             Academic
         </div>
 
-           <span class="menu-disabled" aria-disabled="true">Academics · Coming soon</span>
+              <span class="menu-disabled" aria-disabled="true"><span class="menu-icon" aria-hidden="true">▤</span><span>Academics · Coming soon</span></span>
 
-           <span class="menu-disabled" aria-disabled="true">Timetable · Coming soon</span>
+              <span class="menu-disabled" aria-disabled="true"><span class="menu-icon" aria-hidden="true">◷</span><span>Timetable · Coming soon</span></span>
 
         <a href="admin-results.html">
-             Exams & Results
+                <span class="menu-icon" aria-hidden="true">▥</span>
+                <span>Exams &amp; Results</span>
         </a>
 
-           <span class="menu-disabled" aria-disabled="true">Attendance · Coming soon</span>
+              <span class="menu-disabled" aria-disabled="true"><span class="menu-icon" aria-hidden="true">✓</span><span>Attendance · Coming soon</span></span>
 
 
         <div class="menu-title">
@@ -536,33 +571,34 @@ body {
         </div>
 
         <a href="database/admin-notifications.html">
-             Notifications
+                <span class="menu-icon" aria-hidden="true">♢</span>
+                <span>Notifications</span>
         </a>
 
-           <a href="admin-events.html">Events</a>
+              <a href="admin-events.html"><span class="menu-icon" aria-hidden="true">★</span><span>Events</span></a>
 
 
         <div class="menu-title">
             Career
         </div>
 
-           <span class="menu-disabled" aria-disabled="true">Placements · Coming soon</span>
+           <span class="menu-disabled" aria-disabled="true"><span class="menu-icon" aria-hidden="true">↗</span><span>Placements · Coming soon</span></span>
 
-           <span class="menu-disabled" aria-disabled="true">Internships · Coming soon</span>
+           <span class="menu-disabled" aria-disabled="true"><span class="menu-icon" aria-hidden="true">⌁</span><span>Internships · Coming soon</span></span>
 
 
         <div class="menu-title">
             Documents
         </div>
 
-           <a href="admin-documents.html">Documents</a>
+           <a href="admin-documents.html"><span class="menu-icon" aria-hidden="true">▤</span><span>Documents</span></a>
 
 
         <div class="menu-title">
             System
         </div>
 
-           <a href="admin-settings.html">Settings</a>
+           <a href="admin-settings.html"><span class="menu-icon" aria-hidden="true">⚙</span><span>Settings</span></a>
 
         <button type="button" class="menu-logout" onclick="logout()">Logout</button>
 
