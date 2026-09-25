@@ -210,6 +210,77 @@ CREATE TABLE IF NOT EXISTS subjects (
     section TEXT
 );
 
+CREATE TABLE IF NOT EXISTS store_materials (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    academic_year TEXT NOT NULL,
+    year INTEGER NOT NULL CHECK(year > 0),
+    department TEXT NOT NULL,
+    semester INTEGER NOT NULL CHECK(semester > 0),
+    subject_id INTEGER,
+    material_type TEXT NOT NULL CHECK(material_type IN (
+        'MANUAL', 'LAB_MANUAL', 'ASSIGNMENT', 'QUESTION_BANK',
+        'LAB_RECORD', 'STUDY_MATERIAL', 'NOTES', 'OTHER'
+    )),
+    material_name TEXT NOT NULL,
+    description TEXT,
+    file_url TEXT,
+    file_path TEXT,
+    faculty_id INTEGER,
+    required_quantity INTEGER NOT NULL DEFAULT 0 CHECK(required_quantity >= 0),
+    status TEXT NOT NULL DEFAULT 'SUBMITTED' CHECK(status IN (
+        'SUBMITTED', 'RECEIVED', 'AVAILABLE', 'LOW_STOCK',
+        'OUT_OF_STOCK', 'COMPLETED'
+    )),
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(subject_id) REFERENCES subjects(id) ON DELETE SET NULL,
+    FOREIGN KEY(faculty_id) REFERENCES faculty(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS store_inventory (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    material_id INTEGER NOT NULL UNIQUE,
+    received_quantity INTEGER NOT NULL DEFAULT 0 CHECK(received_quantity >= 0),
+    distributed_quantity INTEGER NOT NULL DEFAULT 0 CHECK(distributed_quantity >= 0),
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(material_id) REFERENCES store_materials(id) ON DELETE CASCADE,
+    CHECK(distributed_quantity <= received_quantity)
+);
+
+CREATE TABLE IF NOT EXISTS store_distributions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    material_id INTEGER NOT NULL,
+    student_id INTEGER NOT NULL,
+    quantity INTEGER NOT NULL DEFAULT 1 CHECK(quantity > 0),
+    status TEXT NOT NULL DEFAULT 'PENDING' CHECK(status IN ('PENDING', 'COLLECTED')),
+    collected_at DATETIME,
+    processed_by INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(material_id, student_id),
+    FOREIGN KEY(material_id) REFERENCES store_materials(id) ON DELETE CASCADE,
+    FOREIGN KEY(student_id) REFERENCES students(id) ON DELETE CASCADE,
+    FOREIGN KEY(processed_by) REFERENCES users(id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_store_materials_academic_scope
+    ON store_materials(academic_year, department, year, semester);
+CREATE INDEX IF NOT EXISTS idx_store_materials_subject
+    ON store_materials(subject_id);
+CREATE INDEX IF NOT EXISTS idx_store_materials_faculty
+    ON store_materials(faculty_id);
+CREATE INDEX IF NOT EXISTS idx_store_materials_status
+    ON store_materials(status);
+CREATE INDEX IF NOT EXISTS idx_store_inventory_material
+    ON store_inventory(material_id);
+CREATE INDEX IF NOT EXISTS idx_store_distributions_material_status
+    ON store_distributions(material_id, status);
+CREATE INDEX IF NOT EXISTS idx_store_distributions_student_status
+    ON store_distributions(student_id, status);
+CREATE INDEX IF NOT EXISTS idx_store_distributions_collected_at
+    ON store_distributions(collected_at);
+
 CREATE TABLE IF NOT EXISTS result_records (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     student_id INTEGER NOT NULL,

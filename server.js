@@ -25,6 +25,7 @@ const departmentHierarchy = require("./database/department-hierarchy");
 const { createKhitAiService } = require("./khit-ai-service");
 const { createKhitAiTools } = require("./khit-ai-tools");
 const { createStorageAdapter } = require("./storage/storage");
+const { registerStoreRoutes } = require("./store-api");
 
 const app = express();
 
@@ -1980,6 +1981,26 @@ const khitAiService = createKhitAiService({
     tools: khitAiTools
 });
 
+registerStoreRoutes({
+    app,
+    db,
+    postgres,
+    usePostgres: usePostgresRuntime,
+    storage,
+    upload,
+    usesObjectStorage,
+    authenticateToken,
+    requireStudent,
+    requireFaculty,
+    departmentHierarchy,
+    runtimeGet,
+    runtimeAll,
+    runtimeRun,
+    getPagination,
+    getSearchTerm,
+    XLSX
+});
+
 async function recordKhitAiAudit(userId, intent, success) {
     if (!userId) return;
     const metadata = JSON.stringify({ intent: intent || "unknown", success: Boolean(success) });
@@ -3577,12 +3598,19 @@ app.post(
                 });
             }
 
-                        const user = await postgres.get(`
-                SELECT *
-                FROM users
-                WHERE username = ?
-                  AND role = 'faculty'
-                        `, [username]);
+                        const user = parentFamily.isPostgresConfigured()
+                                ? await postgres.get(`
+                                        SELECT *
+                                        FROM users
+                                        WHERE username = ?
+                                            AND role = 'faculty'
+                                `, [username])
+                                : getLocalDevelopmentUser(`
+                                        SELECT *
+                                        FROM users
+                                        WHERE username = ?
+                                            AND role = 'faculty'
+                                `, [username]);
 
             if (!user) {
                 return res.status(401).json({
@@ -3599,20 +3627,28 @@ app.post(
                 });
             }
 
-            const faculty = await postgres.get(`
-                SELECT *
-                FROM faculty
-                WHERE user_id = ?
-            `, [user.id]);
+            const faculty = parentFamily.isPostgresConfigured()
+                ? await postgres.get(`
+                    SELECT *
+                    FROM faculty
+                    WHERE user_id = ?
+                `, [user.id])
+                : getLocalDevelopmentUser(`
+                    SELECT *
+                    FROM faculty
+                    WHERE user_id = ?
+                `, [user.id]);
 
             const facultyDepartment = faculty?.department
-                ? await postgres.get(`
-                    SELECT id, code, name
-                    FROM departments
-                    WHERE code = ? OR name = ? OR name ILIKE ?
-                    ORDER BY id ASC
-                    LIMIT 1
-                `, [faculty.department, faculty.department, `%${faculty.department}%`])
+                ? (parentFamily.isPostgresConfigured()
+                    ? await postgres.get(`
+                        SELECT id, code, name
+                        FROM departments
+                        WHERE code = ? OR name = ? OR name ILIKE ?
+                        ORDER BY id ASC
+                        LIMIT 1
+                    `, [faculty.department, faculty.department, `%${faculty.department}%`])
+                    : departmentHierarchy.resolveDepartmentByNameOrCode(faculty.department))
                 : null;
             const token = jwt.sign({
                 id: user.id,

@@ -21,6 +21,15 @@ const CANONICAL_PERMISSIONS = [
     "study_materials.view",
     "study_materials.create",
     "study_materials.manage",
+    "store.materials.view",
+    "store.materials.create",
+    "store.materials.update",
+    "store.materials.manage",
+    "store.inventory.view",
+    "store.inventory.manage",
+    "store.distributions.view",
+    "store.distributions.manage",
+    "store.reports.view",
     "leave.create",
     "leave.view",
     "leave.approve",
@@ -89,7 +98,8 @@ const DEPARTMENT_ROLES = {
         "department.student.read",
         "department.attendance.read",
         "department.results.read",
-        "department.assignments.read"
+        "department.assignments.read",
+        "store.materials.create"
     ],
     ao: [
         "students.view",

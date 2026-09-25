@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>KHIT Store | KHIT Family</title>
+    <script src="language.js"></script>
+    <script src="api-config.js"></script>
+    <link rel="stylesheet" href="premium-theme.css">
+    <link rel="stylesheet" href="store.css">
+</head>
+<body class="store-page">
+    <header class="store-topbar">
+        <div class="store-brand">
+            <div class="store-brand-mark" aria-hidden="true">KS</div>
+            <div><h1>KHIT Store</h1><p>Academic materials and collection tracking</p></div>
+        </div>
+        <div class="store-actions">
+            <a class="store-button primary" href="student-dashboard.html">Dashboard</a>
+            <button class="store-button dark" type="button" id="logoutButton">Logout</button>
+        </div>
+    </header>
+
+    <main class="store-container">
+        <section class="store-hero">
+            <div><h2>Academic materials, clearly tracked</h2><p>Access your eligible materials and review what you have collected from the college store.</p></div>
+            <div class="store-context"><strong id="studentName">Loading student...</strong><span id="studentContext">Loading academic scope...</span></div>
+        </section>
+
+        <div id="pageStatus" class="store-status store-muted" role="status">Loading Store data...</div>
+        <section class="store-cards" aria-label="Store summary">
+            <article class="store-card"><span>Total materials</span><strong id="totalMaterials">-</strong><small>In your academic scope</small></article>
+            <article class="store-card"><span>Available</span><strong id="availableMaterials">-</strong><small>Physical stock available</small></article>
+            <article class="store-card"><span>Collected</span><strong id="collectedMaterials">-</strong><small>Your completed collections</small></article>
+            <article class="store-card"><span>Pending</span><strong id="pendingMaterials">-</strong><small>Still to collect</small></article>
+        </section>
+
+        <section class="store-panel">
+            <h3>My Materials</h3>
+            <form class="store-toolbar" id="filterForm">
+                <div class="store-field grow"><label for="search">Search material or subject</label><input id="search" name="search" type="search" placeholder="Search by name or subject"></div>
+                <div class="store-field"><label for="materialType">Material type</label><select id="materialType" name="material_type"><option value="">All types</option><option value="MANUAL">Manual</option><option value="LAB_MANUAL">Lab Manual</option><option value="ASSIGNMENT">Assignment</option><option value="QUESTION_BANK">Question Bank</option><option value="LAB_RECORD">Lab Record</option><option value="STUDY_MATERIAL">Study Material</option><option value="NOTES">Notes</option><option value="OTHER">Other</option></select></div>
+                <div class="store-field"><label for="academicYear">Academic year</label><input id="academicYear" name="academic_year" placeholder="e.g. 2026-27"></div>
+                <div class="store-field"><label for="semester">Semester</label><input id="semester" name="semester" type="number" min="1" max="20" placeholder="All"></div>
+                <div class="store-field"><label for="statusFilter">Your status</label><select id="statusFilter" name="status"><option value="">All statuses</option><option value="COLLECTED">Collected</option><option value="PENDING">Pending</option></select></div>
+                <button class="store-button secondary" type="submit">Apply filters</button>
+            </form>
+            <div id="materialsStatus" class="store-status store-muted" role="status"></div>
+            <div class="store-table-wrap"><table class="store-table"><thead><tr><th>Material</th><th>Academic scope</th><th>Type</th><th>Inventory</th><th>Status</th><th>File</th></tr></thead><tbody id="materialsBody"></tbody></table></div>
+            <div class="store-pagination"><span id="materialsPageLabel">-</span><div class="store-pagination-actions"><button class="store-button secondary" id="previousPage" type="button">Previous</button><button class="store-button secondary" id="nextPage" type="button">Next</button></div></div>
+        </section>
+
+        <section class="store-panel">
+            <h3>My Store History</h3>
+            <div id="historyStatus" class="store-status store-muted" role="status"></div>
+            <div class="store-table-wrap"><table class="store-table"><thead><tr><th>Material</th><th>Subject</th><th>Type</th><th>Quantity</th><th>Collected date</th><th>Status</th></tr></thead><tbody id="historyBody"></tbody></table></div>
+        </section>
+    </main>
+    <div id="storeToast" class="store-toast" role="status" aria-live="polite"></div>
+
+    <script src="store.js"></script>
+    <script>
+        const pageSize = 12;
+        let currentPage = 1;
+        let totalMaterials = 0;
+        let latestMaterials = [];
+        const $ = id => document.getElementById(id);
+        const filters = () => Object.fromEntries(new FormData($("filterForm")).entries());
+
+        function materialRow(material) {
+            const status = material.your_status || "PENDING";
+            const file = material.file_url ? `<a class="store-link-button" href="${StoreUI.escape(material.file_url)}" target="_blank" rel="noopener">View file</a>` : `<span class="store-muted">Not uploaded</span>`;
+            return `<tr><td><strong>${StoreUI.escape(material.material_name)}</strong><small>${StoreUI.escape(material.subject_name || "Subject not specified")}</small></td><td>${StoreUI.escape(material.academic_year)}<small>${StoreUI.escape(material.department)} · Year ${StoreUI.escape(material.year)} · Sem ${StoreUI.escape(material.semester)}</small></td><td>${StoreUI.escape(StoreUI.formatType(material.material_type))}</td><td><strong>${StoreUI.escape(material.current_stock)}</strong> in stock<small>Required ${StoreUI.escape(material.required_quantity)} · Received ${StoreUI.escape(material.received_quantity)} · Distributed ${StoreUI.escape(material.distributed_quantity)}</small></td><td>${StoreUI.statusBadge(status)}<small>Pending ${StoreUI.escape(material.students_pending)} · Shortage ${StoreUI.escape(material.shortage)}</small></td><td>${file}</td></tr>`;
+        }
+
+        async function loadSummaryAndHistory() {
+            const [summaryResult, historyResult] = await Promise.all([
+                StoreUI.request("/api/store/student/summary"),
+                StoreUI.request("/api/store/my-history?page=1&limit=100")
+            ]);
+            const summary = summaryResult.summary || {};
+            $("studentName").textContent = summaryResult.student?.full_name || "Student";
+            $("studentContext").textContent = [summaryResult.student?.academic_year, summaryResult.student?.department, summaryResult.student?.year ? `Year ${summaryResult.student.year}` : null, summaryResult.student?.section ? `Section ${summaryResult.student.section}` : null].filter(Boolean).join(" · ") || "Your academic scope";
+            $("totalMaterials").textContent = summary.total_materials ?? 0;
+            $("availableMaterials").textContent = summary.available_materials ?? 0;
+            $("collectedMaterials").textContent = summary.my_collected_materials ?? 0;
+            $("pendingMaterials").textContent = summary.my_pending_materials ?? 0;
+            const history = historyResult.history || [];
+            $("historyBody").innerHTML = history.length ? history.map(row => `<tr><td><strong>${StoreUI.escape(row.material_name)}</strong></td><td>${StoreUI.escape(row.subject_name || "-")}</td><td>${StoreUI.escape(StoreUI.formatType(row.material_type))}</td><td>${StoreUI.escape(row.quantity)}</td><td>${StoreUI.escape(StoreUI.formatDate(row.collected_at))}</td><td>${StoreUI.statusBadge(row.status)}</td></tr>`).join("") : `<tr><td colspan="6" class="store-empty">No Store collection history yet.</td></tr>`;
+        }
+
+        async function loadMaterials() {
+            $("materialsStatus").textContent = "Loading Store materials...";
+            const query = StoreUI.queryString({ ...filters(), page: currentPage, limit: pageSize });
+            try {
+                const result = await StoreUI.request(`/api/store/my-materials?${query}`);
+                latestMaterials = result.materials || [];
+                const status = filters().status;
+                const visible = status ? latestMaterials.filter(item => (item.your_status || "PENDING") === status) : latestMaterials;
+                $("materialsBody").innerHTML = visible.length ? visible.map(materialRow).join("") : `<tr><td colspan="6" class="store-empty">No materials available for these filters.</td></tr>`;
+                totalMaterials = Number(result.total || 0);
+                $("materialsPageLabel").textContent = totalMaterials ? `Page ${result.page} · Showing ${visible.length} of ${totalMaterials}` : "No materials found";
+                $("previousPage").disabled = currentPage <= 1;
+                $("nextPage").disabled = currentPage * pageSize >= totalMaterials;
+                $("materialsStatus").textContent = "";
+            } catch (error) {
+                $("materialsBody").innerHTML = `<tr><td colspan="6" class="store-empty">Unable to load Store materials.</td></tr>`;
+                StoreUI.setStatus($("materialsStatus"), StoreUI.statusMessage(error), "error");
+            }
+        }
+
+        async function loadPage() {
+            try { await Promise.all([loadSummaryAndHistory(), loadMaterials()]); StoreUI.setStatus($("pageStatus"), "Store data is up to date.", "success"); }
+            catch (error) { StoreUI.setStatus($("pageStatus"), StoreUI.statusMessage(error), "error"); }
+        }
+        $("filterForm").addEventListener("submit", event => { event.preventDefault(); currentPage = 1; loadMaterials(); });
+        $("previousPage").addEventListener("click", () => { if (currentPage > 1) { currentPage -= 1; loadMaterials(); } });
+        $("nextPage").addEventListener("click", () => { if (currentPage * pageSize < totalMaterials) { currentPage += 1; loadMaterials(); } });
+        $("logoutButton").addEventListener("click", () => StoreUI.logout());
+        loadPage();
+    </script>
+</body>
+</html>

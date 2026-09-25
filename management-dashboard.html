@@ -27,7 +27,7 @@
 <body class="management-dashboard">
   <header>
     <div><h1>KHIT Family</h1><p>Reusable management workspace</p></div>
-    <div class="actions"><a href="index.html">Home</a><button id="logoutButton" type="button">Logout</button></div>
+    <div class="actions"><a href="index.html">Home</a><a id="storeLink" href="store-dashboard.html" style="display:none">KHIT Store</a><button id="logoutButton" type="button">Logout</button></div>
   </header>
   <main>
     <div id="notice" class="notice" role="alert"></div>
@@ -86,6 +86,7 @@
     document.getElementById("departmentLabel").textContent = user.department_name || (user.department_id ? `Department ${user.department_id}` : "");
     document.getElementById("sessionSummary").textContent = `${user.username || "User"} · ${roleNames[role]}${user.department_name ? ` · ${user.department_name}` : ""}`;
     const permissions = Array.isArray(user.permissions) ? user.permissions : [];
+    if (["admin", "superadmin"].includes(role) || permissions.includes("store.inventory.view")) document.getElementById("storeLink").style.display = "inline-block";
     document.getElementById("permissionList").innerHTML = permissions.length ? permissions.map(permission => `<span class="permission">${permission}</span>`).join("") : `<span class="muted">Permissions are enforced by the server.</span>`;
     const views = roleViews[role] || ["dashboard"];
     document.getElementById("cards").innerHTML = views.filter(view => view !== "dashboard").slice(0,8).map(view => `<div class="card"><h3>${escapeHtml(viewDefinitions[view].label)}</h3><div class="value" data-card="${view}">--</div><div class="muted">Loading authorized data</div></div>`).join("");

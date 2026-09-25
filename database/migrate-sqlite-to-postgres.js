@@ -8,6 +8,7 @@ const pool = require("./postgres");
 const expectedTables = [
     "users", "roles", "permissions", "role_permissions", "user_roles", "user_role_scopes",
     "departments", "user_departments", "academic_years", "subjects", "students", "faculty",
+    "store_materials", "store_inventory", "store_distributions",
     "parents", "parent_student_links", "parent_otp_verifications",
     "buses", "bus_stops", "placement_drives", "internships", "notifications",
     "fees", "attendance", "marks", "result_records", "notification_reads",
@@ -23,6 +24,7 @@ const expectedSqliteTotal = 43441;
 const migrationOrder = [
     "users", "roles", "permissions", "role_permissions", "user_roles", "departments",
     "user_role_scopes", "user_departments", "academic_years", "subjects", "students", "faculty",
+    "store_materials", "store_inventory", "store_distributions",
     "parents", "parent_student_links", "parent_otp_verifications",
     "buses", "bus_stops", "placement_drives", "internships", "notifications", "fees",
     "attendance", "marks", "result_records", "notification_reads", "notification_recipients",
@@ -38,7 +40,8 @@ const booleanColumns = new Set([
 
 const numericColumns = new Set([
     "amount", "bus_fee", "cgpa", "external_marks", "fee_year", "grade_point", "internal_marks",
-    "marks", "max_marks", "paid_amount", "pending_amount", "sgpa", "total_amount", "total_marks"
+    "marks", "max_marks", "paid_amount", "pending_amount", "required_quantity",
+    "received_quantity", "distributed_quantity", "quantity", "sgpa", "total_amount", "total_marks"
 ]);
 
 const timestampColumns = new Set([
@@ -62,6 +65,8 @@ const uniqueDefinitions = [
     { table: "app_settings", columns: ["setting_key"] },
     { table: "notification_reads", columns: ["notification_id", "student_id"] },
     { table: "notification_recipients", columns: ["notification_id", "student_id"] },
+    { table: "store_inventory", columns: ["material_id"] },
+    { table: "store_distributions", columns: ["material_id", "student_id"] },
     { table: "assignment_submissions", columns: ["assignment_id", "student_id"] },
     { table: "student_bus_assignments", columns: ["student_id", "academic_year"] },
     { table: "placement_applications", columns: ["drive_id", "student_id"] }

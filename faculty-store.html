@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Faculty KHIT Store | KHIT Family</title>
+    <script src="language.js"></script>
+    <script src="api-config.js"></script>
+    <link rel="stylesheet" href="premium-theme.css">
+    <link rel="stylesheet" href="store.css">
+</head>
+<body class="store-page">
+    <header class="store-topbar">
+        <div class="store-brand"><div class="store-brand-mark" aria-hidden="true">KS</div><div><h1>KHIT Store</h1><p>Faculty material submissions</p></div></div>
+        <div class="store-actions"><a class="store-button primary" href="faculty-dashboard.html">Dashboard</a><button class="store-button dark" id="logoutButton" type="button">Logout</button></div>
+    </header>
+    <main class="store-container">
+        <section class="store-hero"><div><h2>Your Store submissions</h2><p>Submit academic materials to the college Store and monitor physical distribution progress.</p></div><div class="store-context"><strong id="facultyName">Loading faculty...</strong><span id="facultyContext">Loading department...</span></div></section>
+        <div id="pageStatus" class="store-status store-muted" role="status">Loading your Store workspace...</div>
+        <section class="store-cards" aria-label="Faculty Store summary">
+            <article class="store-card"><span>Submitted</span><strong id="submittedCount">-</strong><small>Your materials</small></article>
+            <article class="store-card"><span>Received</span><strong id="receivedTotal">-</strong><small>Physical units received</small></article>
+            <article class="store-card"><span>Distributed</span><strong id="distributedTotal">-</strong><small>Units collected</small></article>
+            <article class="store-card"><span>Current stock</span><strong id="stockTotal">-</strong><small>Units remaining</small></article>
+        </section>
+
+        <section class="store-panel">
+            <h3>Add Material</h3>
+            <form id="materialForm" class="store-form-grid">
+                <div class="store-field"><label for="academicYear">Academic year</label><input id="academicYear" name="academic_year" required placeholder="2026-27"></div>
+                <div class="store-field"><label for="year">Year</label><input id="year" name="year" type="number" min="1" max="10" required placeholder="2"></div>
+                <div class="store-field"><label for="semester">Semester</label><input id="semester" name="semester" type="number" min="1" max="20" required placeholder="1"></div>
+                <div class="store-field"><label for="subject">Subject</label><select id="subject" name="subject_id" required><option value="">Loading subjects...</option></select></div>
+                <div class="store-field"><label for="materialType">Material type</label><select id="materialType" name="material_type" required><option value="MANUAL">Manual</option><option value="LAB_MANUAL">Lab Manual</option><option value="ASSIGNMENT">Assignment</option><option value="QUESTION_BANK">Question Bank</option><option value="LAB_RECORD">Lab Record</option><option value="STUDY_MATERIAL">Study Material</option><option value="NOTES">Notes</option><option value="OTHER">Other</option></select></div>
+                <div class="store-field"><label for="materialName">Material name</label><input id="materialName" name="material_name" required maxlength="200" placeholder="Network Analysis Lab Manual"></div>
+                <div class="store-field"><label for="requiredQuantity">Required quantity</label><input id="requiredQuantity" name="required_quantity" type="number" min="0" max="1000000" required placeholder="180"></div>
+                <div class="store-field"><label for="file">PDF or document</label><input id="file" name="file" type="file" accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.csv,.png,.jpg,.jpeg,.webp,.mp4" required></div>
+                <div class="store-field full"><label for="description">Description</label><textarea id="description" name="description" maxlength="2000" placeholder="Add a short description for the Store team."></textarea></div>
+                <div class="store-field full"><button class="store-button secondary" id="submitMaterial" type="submit">Submit material</button></div>
+            </form>
+            <div id="formStatus" class="store-status" role="status"></div>
+        </section>
+
+        <section class="store-panel"><h3>My Submitted Materials</h3><div id="materialsStatus" class="store-status store-muted"></div><div class="store-table-wrap"><table class="store-table"><thead><tr><th>Material</th><th>Scope</th><th>Type</th><th>Required</th><th>Received</th><th>Distributed</th><th>Stock</th><th>Pending</th><th>Status</th></tr></thead><tbody id="materialsBody"></tbody></table></div></section>
+    </main>
+    <div id="storeToast" class="store-toast" role="status" aria-live="polite"></div>
+    <script src="store.js"></script>
+    <script>
+        const $ = id => document.getElementById(id);
+        let facultyMaterials = [];
+        function renderMaterials() {
+            $("materialsBody").innerHTML = facultyMaterials.length ? facultyMaterials.map(material => `<tr><td><strong>${StoreUI.escape(material.material_name)}</strong><small>${StoreUI.escape(material.subject_name || "-")}</small></td><td>${StoreUI.escape(material.academic_year)}<small>${StoreUI.escape(material.department)} · Year ${StoreUI.escape(material.year)} · Sem ${StoreUI.escape(material.semester)}</small></td><td>${StoreUI.escape(StoreUI.formatType(material.material_type))}</td><td>${StoreUI.escape(material.required_quantity)}</td><td>${StoreUI.escape(material.received_quantity)}</td><td>${StoreUI.escape(material.distributed_quantity)}</td><td>${StoreUI.escape(material.current_stock)}</td><td>${StoreUI.escape(material.students_pending)}</td><td>${StoreUI.statusBadge(material.status)}</td></tr>`).join("") : `<tr><td colspan="9" class="store-empty">You have not submitted any Store materials yet.</td></tr>`;
+        }
+        function updateSummary() {
+            $("submittedCount").textContent = facultyMaterials.length;
+            $("receivedTotal").textContent = facultyMaterials.reduce((sum, item) => sum + Number(item.received_quantity || 0), 0);
+            $("distributedTotal").textContent = facultyMaterials.reduce((sum, item) => sum + Number(item.distributed_quantity || 0), 0);
+            $("stockTotal").textContent = facultyMaterials.reduce((sum, item) => sum + Number(item.current_stock || 0), 0);
+        }
+        async function loadWorkspace() {
+            try {
+                const [dashboard, materials] = await Promise.all([StoreUI.request("/api/faculty/dashboard"), StoreUI.request("/api/store/faculty/materials?page=1&limit=100")]);
+                const faculty = dashboard.faculty || {};
+                $("facultyName").textContent = faculty.full_name || "Faculty";
+                $("facultyContext").textContent = [faculty.department, faculty.designation].filter(Boolean).join(" · ") || "Authorized faculty workspace";
+                facultyMaterials = materials.materials || [];
+                const subjects = dashboard.subjects || [];
+                $("subject").innerHTML = subjects.length ? subjects.map(item => `<option value="${StoreUI.escape(item.id)}" data-year="${StoreUI.escape(item.year || "")}" data-semester="${StoreUI.escape(item.semester || "")}">${StoreUI.escape(item.name)}${item.code ? ` (${StoreUI.escape(item.code)})` : ""}</option>`).join("") : `<option value="">No assigned subjects found</option>`;
+                renderMaterials();
+                updateSummary();
+                StoreUI.setStatus($("pageStatus"), "Store data is up to date.", "success");
+            } catch (error) {
+                StoreUI.setStatus($("pageStatus"), StoreUI.statusMessage(error), "error");
+                StoreUI.setStatus($("materialsStatus"), "Unable to load submitted materials.", "error");
+            }
+        }
+        $("subject").addEventListener("change", () => {
+            const option = $("subject").selectedOptions[0];
+            if (option?.dataset.year) $("year").value = option.dataset.year;
+            if (option?.dataset.semester) $("semester").value = option.dataset.semester;
+        });
+        $("materialForm").addEventListener("submit", async event => {
+            event.preventDefault();
+            const file = $("file").files[0];
+            if (!file) return StoreUI.setStatus($("formStatus"), "Please choose a material file.", "error");
+            const formData = new FormData($("materialForm"));
+            $("submitMaterial").disabled = true;
+            StoreUI.setStatus($("formStatus"), "Submitting material and uploading file...", "");
+            try {
+                await StoreUI.request("/api/store/materials", { method: "POST", body: formData, headers: {} });
+                $("materialForm").reset();
+                StoreUI.setStatus($("formStatus"), "Material submitted successfully.", "success");
+                StoreUI.showToast("Material submitted successfully.", "success");
+                await loadWorkspace();
+            } catch (error) { StoreUI.setStatus($("formStatus"), StoreUI.statusMessage(error), "error"); StoreUI.showToast(StoreUI.statusMessage(error), "error"); }
+            finally { $("submitMaterial").disabled = false; }
+        });
+        $("logoutButton").addEventListener("click", () => StoreUI.logout("faculty-login.html"));
+        loadWorkspace();
+    </script>
+</body>
+</html>
