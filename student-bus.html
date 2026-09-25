@@ -21,8 +21,8 @@
 
         .topbar {
             height: 70px;
-            background: white;
-            border-bottom: 1px solid #e5e7eb;
+            background: linear-gradient(180deg, #1b1b22 0%, #12161d 100%);
+            border-bottom: 1px solid rgba(255,255,255,0.08);
             display: flex;
             justify-content: space-between;
             align-items: center;
@@ -30,6 +30,7 @@
             position: sticky;
             top: 0;
             z-index: 10;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.18);
         }
 
         .brand {
@@ -49,18 +50,20 @@
         .logo {
             width: 42px;
             height: 42px;
-            background: var(--khit-brand-blue, #123c69);
+            background: linear-gradient(135deg, #5e1029 0%, #8f1738 100%);
             color: white;
             border-radius: 10px;
             display: flex;
             align-items: center;
             justify-content: center;
-            font-size: 13px;
-            font-weight: bold;
+            font-size: 12px;
+            font-weight: 800;
+            letter-spacing: 0.08em;
+            box-shadow: 0 8px 18px rgba(95,16,41,0.28);
         }
 
         .brand h2 {
-            color: var(--khit-brand-text, #123c69);
+            color: #8f1738;
             font-size: 20px;
         }
 
