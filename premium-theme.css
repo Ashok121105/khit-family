@@ -392,6 +392,122 @@ textarea:focus {
     box-shadow: 8px 0 28px rgba(13, 43, 77, 0.16) !important;
 }
 
+.sidebar .brand h1,
+.sidebar .brand h2,
+.sidebar .brand p {
+    color: #ffffff !important;
+}
+
+.sidebar .menu button {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    min-height: 40px;
+    color: #f7e8eb !important;
+}
+
+.sidebar .menu button::before {
+    width: 22px;
+    flex: 0 0 22px;
+    color: #f6d89b;
+    content: "•";
+    font-size: 17px;
+    line-height: 1;
+    text-align: center;
+}
+
+.sidebar .menu button[onclick*="dashboard"]::before { content: "⌂"; }
+.sidebar .menu button[onclick*="students"]::before { content: "♙"; }
+.sidebar .menu button[onclick*="faculty"]::before { content: "♟"; }
+.sidebar .menu button[onclick*="fees"]::before { content: "$"; }
+.sidebar .menu button[onclick*="bus"]::before { content: "▰"; }
+
+.sidebar .menu button:hover,
+.sidebar .menu button.active {
+    background: rgba(255, 255, 255, 0.16) !important;
+    color: #ffffff !important;
+    box-shadow: inset 3px 0 0 #f6d89b;
+}
+
+.sidebar .menu button:hover::before,
+.sidebar .menu button.active::before {
+    color: #ffffff;
+}
+
+.side {
+    background:
+        linear-gradient(180deg, var(--khit-maroon-dark) 0%, var(--khit-maroon) 70%, #a33b55 100%) !important;
+    box-shadow: 8px 0 28px rgba(13, 43, 77, 0.16) !important;
+}
+
+.side .brand h1,
+.side .brand h2,
+.side .brand p {
+    color: #ffffff !important;
+}
+
+.side .brand p {
+    opacity: 0.78;
+}
+
+.side .nav a {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 40px;
+    color: #f7e8eb !important;
+    border: 1px solid transparent;
+}
+
+.side .nav a::before {
+    width: 22px;
+    flex: 0 0 22px;
+    color: #f6d89b;
+    content: "•";
+    font-size: 17px;
+    line-height: 1;
+    text-align: center;
+}
+
+.side .nav a[href*="dashboard"]::before { content: "⌂"; }
+.side .nav a[href*="students"]::before { content: "♙"; }
+.side .nav a[href*="faculty"]::before { content: "♟"; }
+.side .nav a[href*="fees"]::before { content: "$"; }
+.side .nav a[href*="bus"]::before { content: "▰"; }
+.side .nav a[href*="notifications"]::before { content: "♢"; }
+.side .nav a[href*="events"]::before { content: "★"; }
+.side .nav a[href*="results"]::before { content: "▥"; }
+.side .nav a[href*="documents"]::before { content: "▤"; }
+.side .nav a[href*="reports"]::before { content: "▥"; }
+.side .nav a[href*="settings"]::before { content: "⚙"; }
+
+.side .nav a:hover,
+.side .nav a.active {
+    background: rgba(255, 255, 255, 0.16) !important;
+    border-color: rgba(255, 255, 255, 0.16);
+    box-shadow: inset 3px 0 0 #f6d89b;
+}
+
+.side .nav a:hover::before,
+.side .nav a.active::before {
+    color: #ffffff;
+}
+
+.side .logout {
+    background: rgba(0, 0, 0, 0.22) !important;
+    border: 1px solid rgba(255, 255, 255, 0.2) !important;
+    color: #ffffff !important;
+}
+
+.login-container .logo-section h1 {
+    color: #ffffff !important;
+}
+
+.login-container .logo-section p {
+    color: #f7e8eb !important;
+}
+
 .menu-item:hover,
 .menu-item.active,
 .menu a:hover,
