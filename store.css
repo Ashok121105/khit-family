@@ -15,6 +15,9 @@
 .store-page *, .store-page *::before, .store-page *::after { box-sizing: border-box; }
 .store-page { min-height: 100vh; color: var(--store-ink); background: linear-gradient(145deg, #fbf8f5 0%, #fff 52%, #f7eef0 100%); font-family: Arial, sans-serif; }
 .store-topbar { background: linear-gradient(135deg, var(--store-dark), var(--store-maroon)); color: #fff; padding: 18px 5vw; display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+.store-page .store-topbar { background: linear-gradient(135deg, var(--store-dark), var(--store-maroon)) !important; color: #fff !important; }
+.store-page .store-topbar .store-brand h1,
+.store-page .store-topbar .store-brand p { color: #fff !important; }
 .store-brand { display: flex; align-items: center; gap: 12px; }
 .store-brand-mark { width: 42px; height: 42px; display: grid; place-items: center; border: 1px solid rgba(255,255,255,.35); border-radius: 12px; color: #f6d89b; font-weight: 800; }
 .store-brand h1 { margin: 0; font: 700 22px Georgia, "Times New Roman", serif; }
