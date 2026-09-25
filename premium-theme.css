@@ -138,6 +138,73 @@ body.management-dashboard .scope strong {
     color: #f6d89b !important;
 }
 
+body:not(.store-page) header,
+body:not(.store-page) .topbar,
+body:not(.store-page) .settings-topbar {
+    background: linear-gradient(135deg, var(--khit-maroon-dark) 0%, var(--khit-maroon) 100%) !important;
+    border-color: transparent !important;
+    color: #ffffff !important;
+    box-shadow: 0 10px 24px rgba(95, 16, 41, 0.2) !important;
+    backdrop-filter: none;
+}
+
+body:not(.store-page) header .brand,
+body:not(.store-page) header .brand h1,
+body:not(.store-page) header .brand h2,
+body:not(.store-page) header .brand p,
+body:not(.store-page) header .brand-text h2,
+body:not(.store-page) header .brand-text p,
+body:not(.store-page) header .header-name,
+body:not(.store-page) header .topbar-left,
+body:not(.store-page) header .topbar-left h1,
+body:not(.store-page) header .topbar-left p,
+body:not(.store-page) .topbar .brand,
+body:not(.store-page) .topbar .brand h1,
+body:not(.store-page) .topbar .brand h2,
+body:not(.store-page) .topbar .brand p,
+body:not(.store-page) .topbar .actions,
+body:not(.store-page) .topbar .actions a,
+body:not(.store-page) .topbar .actions button,
+body:not(.store-page) .topbar .header-right,
+body:not(.store-page) .settings-topbar .brand,
+body:not(.store-page) .settings-topbar .brand h1,
+body:not(.store-page) .settings-topbar .brand h2,
+body:not(.store-page) .settings-topbar .brand p {
+    color: #ffffff !important;
+}
+
+body:not(.store-page) header a,
+body:not(.store-page) .topbar a,
+body:not(.store-page) .settings-topbar a {
+    color: #ffffff !important;
+}
+
+body:not(.store-page) header .logo,
+body:not(.store-page) header .brand-logo,
+body:not(.store-page) header .brand-badge,
+body:not(.store-page) .topbar .logo,
+body:not(.store-page) .topbar .brand-logo,
+body:not(.store-page) .topbar .brand-badge {
+    background: rgba(255, 255, 255, 0.12) !important;
+    border-color: rgba(255, 255, 255, 0.35) !important;
+    color: #f6d89b !important;
+    box-shadow: none !important;
+}
+
+body:not(.store-page) header .dashboard,
+body:not(.store-page) header .logout,
+body:not(.store-page) header .logout-btn,
+body:not(.store-page) header .btn,
+body:not(.store-page) .topbar .dashboard,
+body:not(.store-page) .topbar .logout,
+body:not(.store-page) .topbar .logout-btn,
+body:not(.store-page) .topbar .btn {
+    background: rgba(0, 0, 0, 0.2) !important;
+    border: 1px solid rgba(255, 255, 255, 0.2) !important;
+    color: #ffffff !important;
+    box-shadow: none !important;
+}
+
 body.management-dashboard .card,
 body.management-dashboard .panel {
     border-radius: 12px;
